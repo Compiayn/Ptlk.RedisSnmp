@@ -1,0 +1,43 @@
+@page "/log"
+@rendermode InteractiveServer
+@inject LogService Logs
+
+<h1>Log</h1>
+
+<button class="btn btn-outline-primary mb-3" @onclick="LoadAsync">Refresh</button>
+
+<h2>System</h2>
+<table class="table table-sm">
+    <thead><tr><th>Time</th><th>Category</th><th>Level</th><th>Message</th></tr></thead>
+    <tbody>
+    @foreach (var item in system.Items)
+    {
+        <tr><td>@item.CreatedAt.ToLocalTime()</td><td>@item.Category</td><td>@item.Level</td><td>@item.Message</td></tr>
+    }
+    </tbody>
+</table>
+
+<h2>SNMP</h2>
+<table class="table table-sm">
+    <thead><tr><th>Time</th><th>Agent</th><th>OID</th><th>Operation</th><th>Level</th><th>Message</th></tr></thead>
+    <tbody>
+    @foreach (var item in snmp)
+    {
+        <tr><td>@item.CreatedAt.ToLocalTime()</td><td>@item.AgentId</td><td>@item.NumericOid</td><td>@item.Operation</td><td>@item.Level</td><td>@item.Message</td></tr>
+    }
+    </tbody>
+</table>
+
+@code {
+    private PagedResult<SystemLogEntry> system = new([], 0, 1, 50);
+    private IReadOnlyList<SnmpLogEntry> snmp = [];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var query = new LogQuery(null, null, null, null, null, null, 1, 50);
+        system = await Logs.QuerySystemAsync(query);
+        snmp = await Logs.QueryRecentSnmpAsync(query);
+    }
+}

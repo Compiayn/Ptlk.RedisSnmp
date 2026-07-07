@@ -1,0 +1,67 @@
+@page "/"
+@rendermode InteractiveServer
+@inject RuntimeModeService Runtime
+
+<h1>Runtime</h1>
+
+<section class="status-grid">
+    <div class="status-tile">
+        <div class="label">Mode</div>
+        <div class="value">@state.Mode</div>
+    </div>
+    <div class="status-tile">
+        <div class="label">SNMP acquisition</div>
+        <div class="value">@state.AcquisitionStatus</div>
+        <p>@state.AcquisitionMessage</p>
+    </div>
+    <div class="status-tile">
+        <div class="label">Redis output</div>
+        <div class="value">@state.RedisOutputStatus</div>
+        <p>@state.RedisOutputMessage</p>
+    </div>
+    <div class="status-tile">
+        <div class="label">Trap</div>
+        <div class="value">@state.TrapStatus</div>
+        <p>@state.TrapMessage</p>
+    </div>
+    <div class="status-tile">
+        <div class="label">MIB</div>
+        <div class="value">@state.MibStatus</div>
+        <p>@state.MibMessage</p>
+    </div>
+</section>
+
+@if (state.RedisOutputDiagnostics.Count > 0)
+{
+    <h2>Redis Output Diagnostics</h2>
+    <table class="table table-sm">
+        <thead><tr><th>Source</th><th>Redis key</th><th>Status</th><th>Message</th></tr></thead>
+        <tbody>
+        @foreach (var item in state.RedisOutputDiagnostics)
+        {
+            <tr><td>@item.SourcePath</td><td>@item.RedisKey</td><td>@item.Status</td><td>@item.Message</td></tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private RuntimeState state = default!;
+
+    protected override void OnInitialized()
+    {
+        state = Runtime.Current;
+        Runtime.Changed += OnRuntimeChanged;
+    }
+
+    private void OnRuntimeChanged(RuntimeState updated)
+    {
+        state = updated;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Runtime.Changed -= OnRuntimeChanged;
+    }
+}

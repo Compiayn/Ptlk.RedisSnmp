@@ -1,0 +1,13 @@
+bin/
+obj/
+*.db
+*.db-shm
+*.db-wal
+.vs/
+.vscode/
+.git/
+data-protection-keys/
+mibs/
+snmp-work/
+snmp/
+traps/

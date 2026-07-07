@@ -1,0 +1,89 @@
+@page "/browser"
+@rendermode InteractiveServer
+@inject BrowserSnapshotService SnapshotService
+@inject CommandDispatcherService Dispatcher
+@inject CommandExecutionService Commands
+
+<h1>Browser</h1>
+
+<button class="btn btn-outline-primary mb-3" @onclick="LoadAsync">Refresh</button>
+
+<table class="table table-sm align-middle">
+    <thead>
+        <tr><th>Agent</th><th>Point</th><th>Local</th><th>Quality</th><th>Redis</th><th>Ownership</th><th>Write</th></tr>
+    </thead>
+    <tbody>
+    @foreach (var row in rows)
+    {
+        <tr>
+            <td>@row.AgentId</td>
+            <td><div>@row.PointName</div><small>@row.SourcePath</small></td>
+            <td>@row.LocalValue</td>
+            <td>@row.LocalQuality</td>
+            <td>
+                @if (row.RedisKey is null)
+                {
+                    <span>No Redis mapping.</span>
+                }
+                else
+                {
+                    <div>@row.RedisKey</div>
+                    <small>v@(row.RedisState?.Version.ToString() ?? "-") @row.RedisState?.Quality</small>
+                }
+            </td>
+            <td>@(row.Owned ? "owned" : row.OwnershipStatus)</td>
+            <td>
+                <div class="input-group input-group-sm">
+                    <input class="form-control" @bind="writeValues[row.SourcePath]" />
+                    <button class="btn btn-outline-secondary" @onclick="() => WriteSnmpAsync(row.SourcePath)">SNMP</button>
+                    @if (row.RedisKey is not null)
+                    {
+                        <button class="btn btn-outline-primary" @onclick="() => WriteRedisAsync(row)">Redis</button>
+                    }
+                </div>
+            </td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+@code {
+    private IReadOnlyList<BrowserPointSnapshot> rows = [];
+    private Dictionary<string, string> writeValues = new(StringComparer.OrdinalIgnoreCase);
+    private string? message;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        rows = await SnapshotService.SnapshotAsync();
+        foreach (var row in rows)
+        {
+            writeValues.TryAdd(row.SourcePath, "");
+        }
+    }
+
+    private async Task WriteSnmpAsync(string sourcePath)
+    {
+        var result = await Commands.DirectSnmpWriteAsync(sourcePath, writeValues.GetValueOrDefault(sourcePath) ?? "", "browser");
+        message = $"{result.Status}: {result.Message}";
+        await LoadAsync();
+    }
+
+    private async Task WriteRedisAsync(BrowserPointSnapshot row)
+    {
+        if (row.RedisKey is null)
+        {
+            return;
+        }
+        var mapping = new Ptlk.RedisSnmp.Models.RedisMapping { SourcePath = row.SourcePath, RedisKey = row.RedisKey };
+        var result = await Dispatcher.DispatchHmiWriteAsync(mapping, writeValues.GetValueOrDefault(row.SourcePath) ?? "", "browser");
+        message = $"{result.Status}: {result.Message}";
+        await LoadAsync();
+    }
+}

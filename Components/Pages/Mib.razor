@@ -1,0 +1,58 @@
+@page "/mib"
+@rendermode InteractiveServer
+@inject MibImportService Importer
+@inject MibLookupService Lookup
+@inject MibExportService Exporter
+
+<h1>MIB</h1>
+
+<section class="form-band">
+    <div class="row g-2">
+        <div class="col"><input class="form-control" placeholder="Version name" @bind="versionName" /></div>
+        <div class="col-auto form-check form-switch">
+            <input class="form-check-input" type="checkbox" @bind="activate" />
+            <label class="form-check-label">Activate</label>
+        </div>
+        <div class="col-auto"><button class="btn btn-primary" @onclick="ImportAsync">Import Text</button></div>
+    </div>
+    <textarea class="form-control mt-2" rows="8" @bind="mibText" placeholder="numeric_oid,symbolic_name,module,syntax,access,description"></textarea>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+<h2>Active Nodes</h2>
+<table class="table table-sm">
+    <thead><tr><th>OID</th><th>Symbol</th><th>Syntax</th><th>Access</th></tr></thead>
+    <tbody>
+    @foreach (var node in nodes)
+    {
+        <tr><td>@node.NumericOid</td><td>@node.SymbolicName</td><td>@node.Syntax</td><td>@node.Access</td></tr>
+    }
+    </tbody>
+</table>
+
+@code {
+    private string versionName = "default";
+    private string mibText = "";
+    private bool activate = true;
+    private string? message;
+    private IReadOnlyList<MibLookupResult> nodes = [];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task ImportAsync()
+    {
+        var result = await Importer.ImportTextAsync(versionName, "ui-text.csv", mibText, activate);
+        message = result.Success ? $"Imported {result.NodeCount} node(s)." : string.Join("; ", result.Errors);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        nodes = await Lookup.ListActiveAsync();
+        _ = await Exporter.ExportProjectMibAsync();
+    }
+}

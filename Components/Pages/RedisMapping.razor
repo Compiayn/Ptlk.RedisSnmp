@@ -1,0 +1,60 @@
+@page "/redis-mapping"
+@rendermode InteractiveServer
+@inject RedisMappingValidationService Validation
+
+<h1>RedisMapping</h1>
+
+<div class="row g-2 form-band">
+    <div class="col"><input class="form-control" placeholder="SourcePath" @bind="sourcePath" /></div>
+    <div class="col"><input class="form-control" placeholder="RedisKey point:*" @bind="redisKey" /></div>
+    <div class="col-auto"><button class="btn btn-primary" @onclick="SaveAsync">Save</button></div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+<table class="table table-sm">
+    <thead><tr><th>SourcePath</th><th>RedisKey</th><th></th></tr></thead>
+    <tbody>
+    @foreach (var item in mappings)
+    {
+        <tr>
+            <td>@item.SourcePath</td>
+            <td>@item.RedisKey</td>
+            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(item.Id)">Delete</button></td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@code {
+    private List<Ptlk.RedisSnmp.Models.RedisMapping> mappings = [];
+    private string sourcePath = "";
+    private string redisKey = "";
+    private string? message;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync() => mappings = await Validation.ListAsync();
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            await Validation.CreateOrUpdateAsync(null, sourcePath, redisKey);
+            sourcePath = "";
+            redisKey = "";
+            message = "Mapping saved.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { message = ex.Message; }
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        await Validation.DeleteAsync(id);
+        await LoadAsync();
+    }
+}

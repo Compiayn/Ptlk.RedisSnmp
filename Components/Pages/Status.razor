@@ -1,0 +1,32 @@
+@page "/status"
+@rendermode InteractiveServer
+@inject RuntimeModeService Runtime
+@inject RedisPointOwnershipService Ownership
+
+<h1>Status</h1>
+
+<p>@Runtime.Current.Message</p>
+
+<table class="table table-sm">
+    <tbody>
+        <tr><th>Redis connected</th><td>@Runtime.Current.RedisConnected</td></tr>
+        <tr><th>Asset initialized</th><td>@Runtime.Current.AssetInitialized</td></tr>
+        <tr><th>Updated</th><td>@Runtime.Current.UpdatedAt.LocalDateTime</td></tr>
+    </tbody>
+</table>
+
+<h2>Ownership</h2>
+<table class="table table-sm">
+    <thead><tr><th>Source</th><th>Redis key</th><th>Status</th><th>Owner</th></tr></thead>
+    <tbody>
+    @foreach (var claim in Ownership.Snapshot())
+    {
+        <tr>
+            <td>@claim.SourcePath</td>
+            <td>@claim.RedisKey</td>
+            <td>@claim.Status</td>
+            <td>@claim.Owner</td>
+        </tr>
+    }
+    </tbody>
+</table>

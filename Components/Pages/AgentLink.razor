@@ -1,0 +1,166 @@
+@page "/agent-link"
+@rendermode InteractiveServer
+@inject SnmpCredentialService Credentials
+@inject SnmpAgentService Agents
+@inject SnmpPointService Points
+
+<h1>AgentLink</h1>
+
+<section class="form-band">
+    <h2>Credential</h2>
+    <div class="row g-2">
+        <div class="col"><input class="form-control" placeholder="Name" @bind="credential.Name" /></div>
+        <div class="col">
+            <select class="form-select" @bind="credential.Version">
+                <option value="v1">v1</option>
+                <option value="v2c">v2c</option>
+                <option value="v3">v3</option>
+            </select>
+        </div>
+        <div class="col"><input class="form-control" placeholder="Community" @bind="community" /></div>
+        <div class="col-auto"><button class="btn btn-primary" @onclick="SaveCredentialAsync">Save</button></div>
+    </div>
+</section>
+
+<section class="form-band">
+    <h2>Agent</h2>
+    <div class="row g-2">
+        <div class="col"><input class="form-control" placeholder="AgentId" @bind="agent.AgentId" /></div>
+        <div class="col"><input class="form-control" placeholder="Display name" @bind="agent.DisplayName" /></div>
+        <div class="col"><input class="form-control" placeholder="Host" @bind="agent.Host" /></div>
+        <div class="col-1"><input class="form-control" type="number" @bind="agent.Port" /></div>
+        <div class="col">
+            <select class="form-select" @bind="agent.CredentialConfigId">
+                <option value="">No credential</option>
+                @foreach (var item in credentials)
+                {
+                    <option value="@item.Id">@item.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto"><button class="btn btn-primary" @onclick="SaveAgentAsync">Save</button></div>
+    </div>
+</section>
+
+<section class="form-band">
+    <h2>Point</h2>
+    <div class="row g-2">
+        <div class="col">
+            <select class="form-select" @bind="point.AgentConfigId">
+                <option value="0">Select agent</option>
+                @foreach (var item in agents)
+                {
+                    <option value="@item.Id">@item.AgentId</option>
+                }
+            </select>
+        </div>
+        <div class="col"><input class="form-control" placeholder="Point name" @bind="point.PointName" /></div>
+        <div class="col"><input class="form-control" placeholder="Numeric OID" @bind="point.NumericOid" /></div>
+        <div class="col">
+            <select class="form-select" @bind="point.ValueType">
+                <option value="string">string</option>
+                <option value="integer">integer</option>
+                <option value="double">double</option>
+                <option value="boolean">boolean</option>
+                <option value="timeticks">timeticks</option>
+                <option value="oid">oid</option>
+            </select>
+        </div>
+        <div class="col">
+            <select class="form-select" @bind="point.Access">
+                <option value="ro">ro</option>
+                <option value="rw">rw</option>
+                <option value="wo">wo</option>
+            </select>
+        </div>
+        <div class="col-auto form-check form-switch">
+            <input class="form-check-input" type="checkbox" @bind="point.SetEnabled" />
+            <label class="form-check-label">Set</label>
+        </div>
+        <div class="col-auto"><button class="btn btn-primary" @onclick="SavePointAsync">Save</button></div>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+<h2>Agents</h2>
+<table class="table table-sm">
+    <thead><tr><th>AgentId</th><th>Host</th><th>Credential</th><th>Points</th></tr></thead>
+    <tbody>
+    @foreach (var item in agents)
+    {
+        <tr><td>@item.AgentId</td><td>@item.Host:@item.Port</td><td>@item.CredentialConfig?.Name</td><td>@item.Points.Count</td></tr>
+    }
+    </tbody>
+</table>
+
+<h2>Points</h2>
+<table class="table table-sm">
+    <thead><tr><th>SourcePath</th><th>Name</th><th>OID</th><th>Access</th><th>Set</th></tr></thead>
+    <tbody>
+    @foreach (var item in points)
+    {
+        <tr><td>@item.SourcePath</td><td>@item.PointName</td><td>@item.NumericOid</td><td>@item.Access</td><td>@item.SetEnabled</td></tr>
+    }
+    </tbody>
+</table>
+
+@code {
+    private List<SnmpCredentialConfig> credentials = [];
+    private List<SnmpAgentConfig> agents = [];
+    private List<SnmpPointConfig> points = [];
+    private SnmpCredentialConfig credential = new() { Version = "v2c" };
+    private SnmpAgentConfig agent = new() { Port = 161, SnmpVersion = "v2c", TimeoutMs = 5000, RetryCount = 1, PollingRateMs = 1000, Enabled = true };
+    private SnmpPointConfig point = new() { ValueType = "string", Access = "ro", PollEnabled = true };
+    private string? community;
+    private string? message;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        credentials = await Credentials.ListAsync();
+        agents = await Agents.ListAsync();
+        points = await Points.ListAsync();
+    }
+
+    private async Task SaveCredentialAsync()
+    {
+        try
+        {
+            await Credentials.CreateOrUpdateAsync(credential, new SnmpCredentialSecrets(community, null, null));
+            credential = new() { Version = "v2c" };
+            community = null;
+            message = "Credential saved.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { message = ex.Message; }
+    }
+
+    private async Task SaveAgentAsync()
+    {
+        try
+        {
+            await Agents.CreateOrUpdateAsync(agent);
+            agent = new() { Port = 161, SnmpVersion = "v2c", TimeoutMs = 5000, RetryCount = 1, PollingRateMs = 1000, Enabled = true };
+            message = "Agent saved.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { message = ex.Message; }
+    }
+
+    private async Task SavePointAsync()
+    {
+        try
+        {
+            await Points.CreateOrUpdateAsync(point);
+            point = new() { ValueType = "string", Access = "ro", PollEnabled = true };
+            message = "Point saved.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { message = ex.Message; }
+    }
+}

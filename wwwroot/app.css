@@ -1,0 +1,76 @@
+html, body {
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+a, .btn-link {
+    color: #0f5fa8;
+}
+
+.content {
+    padding-top: 1.1rem;
+}
+
+h1 {
+    font-size: 1.8rem;
+    margin-bottom: 1rem;
+}
+
+h2 {
+    font-size: 1.15rem;
+    margin-top: 1.5rem;
+}
+
+.form-band {
+    border-top: 1px solid #d7dde5;
+    border-bottom: 1px solid #d7dde5;
+    padding: 1rem 0;
+    margin-bottom: 1rem;
+}
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+}
+
+.status-tile {
+    border: 1px solid #d7dde5;
+    border-radius: 6px;
+    padding: 0.8rem;
+    min-height: 120px;
+}
+
+.status-tile .label {
+    color: #56616f;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+}
+
+.status-tile .value {
+    font-size: 1.3rem;
+    font-weight: 700;
+}
+
+small {
+    color: #5f6c7a;
+}
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: #fff3cd;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 0.75rem;
+    top: 0.5rem;
+}

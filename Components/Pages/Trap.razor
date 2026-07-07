@@ -1,0 +1,30 @@
+@page "/trap"
+@rendermode InteractiveServer
+@inject LogService Logs
+@inject RuntimeModeService Runtime
+
+<h1>Trap</h1>
+
+<p>@Runtime.Current.TrapStatus: @Runtime.Current.TrapMessage</p>
+<button class="btn btn-outline-primary mb-3" @onclick="LoadAsync">Refresh</button>
+
+<table class="table table-sm">
+    <thead><tr><th>Received</th><th>Agent</th><th>Source</th><th>Trap OID</th><th>Payload</th></tr></thead>
+    <tbody>
+    @foreach (var item in traps)
+    {
+        <tr><td>@item.ReceivedAt.ToLocalTime()</td><td>@item.AgentId</td><td>@item.SourceAddress</td><td>@item.TrapOid</td><td><code>@item.VarbindsJson</code></td></tr>
+    }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<SnmpTrapLogEntry> traps = [];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        traps = await Logs.QueryRecentTrapsAsync();
+    }
+}
