@@ -12,8 +12,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<CommandExecution> CommandExecutions => Set<CommandExecution>();
     public DbSet<SystemLogEntry> SystemLogEntries => Set<SystemLogEntry>();
     public DbSet<SnmpLogEntry> SnmpLogEntries => Set<SnmpLogEntry>();
+    public DbSet<MibSet> MibSets => Set<MibSet>();
+    public DbSet<MibFile> MibFiles => Set<MibFile>();
     public DbSet<MibImportJob> MibImportJobs => Set<MibImportJob>();
     public DbSet<MibNode> MibNodes => Set<MibNode>();
+    public DbSet<MibSetValidationIssue> MibSetValidationIssues => Set<MibSetValidationIssue>();
     public DbSet<SnmpTrapLogEntry> SnmpTrapLogEntries => Set<SnmpTrapLogEntry>();
     public DbSet<SnmpTrapRuleConfig> SnmpTrapRuleConfigs => Set<SnmpTrapRuleConfig>();
 
@@ -39,6 +42,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(c => c.Name).HasMaxLength(160).IsRequired();
             entity.Property(c => c.Version).HasMaxLength(16).IsRequired();
             entity.Property(c => c.ProtectedCommunity).HasMaxLength(2000);
+            entity.Property(c => c.ProtectedReadCommunity).HasMaxLength(2000);
+            entity.Property(c => c.ProtectedWriteCommunity).HasMaxLength(2000);
             entity.Property(c => c.SecurityName).HasMaxLength(160);
             entity.Property(c => c.SecurityLevel).HasMaxLength(32);
             entity.Property(c => c.AuthProtocol).HasMaxLength(32);
@@ -61,6 +66,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                   .WithMany()
                   .HasForeignKey(a => a.CredentialConfigId)
                   .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(a => a.PreferredMibSet)
+                  .WithMany()
+                  .HasForeignKey(a => a.PreferredMibSetId)
+                  .OnDelete(DeleteBehavior.SetNull);
             entity.HasMany(a => a.Points)
                   .WithOne(p => p.AgentConfig)
                   .HasForeignKey(p => p.AgentConfigId)
@@ -77,7 +86,15 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(p => p.ValueType).HasMaxLength(32).IsRequired();
             entity.Property(p => p.Access).HasMaxLength(16).IsRequired();
             entity.Property(p => p.Description).HasMaxLength(1000);
+            entity.Property(p => p.MibModule).HasMaxLength(160);
+            entity.Property(p => p.MibSyntax).HasMaxLength(80);
+            entity.Property(p => p.MibAccess).HasMaxLength(40);
             entity.Property(p => p.MibLabel).HasMaxLength(240);
+            entity.Property(p => p.MibDescription).HasMaxLength(4000);
+            entity.HasOne(p => p.MibSetUsedForMapping)
+                  .WithMany()
+                  .HasForeignKey(p => p.MibSetIdUsedForMapping)
+                  .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<RedisMapping>(entity =>
@@ -132,6 +149,39 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                   .OnDelete(DeleteBehavior.SetNull);
         });
 
+        modelBuilder.Entity<MibSet>(entity =>
+        {
+            entity.HasIndex(s => s.Name).IsUnique();
+            entity.Property(s => s.Name).HasMaxLength(160).IsRequired();
+            entity.Property(s => s.Description).HasMaxLength(1000);
+            entity.Property(s => s.Status).HasMaxLength(32).IsRequired();
+            entity.HasMany(s => s.Files)
+                  .WithOne(f => f.MibSet)
+                  .HasForeignKey(f => f.MibSetId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(s => s.Nodes)
+                  .WithOne(n => n.MibSet)
+                  .HasForeignKey(n => n.MibSetId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(s => s.ValidationIssues)
+                  .WithOne(i => i.MibSet)
+                  .HasForeignKey(i => i.MibSetId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MibFile>(entity =>
+        {
+            entity.HasIndex(f => new { f.MibSetId, f.FileName });
+            entity.HasIndex(f => f.Hash);
+            entity.Property(f => f.FileName).HasMaxLength(255).IsRequired();
+            entity.Property(f => f.StoredPath).HasMaxLength(500);
+            entity.Property(f => f.ModuleName).HasMaxLength(160);
+            entity.Property(f => f.ModuleIdentityOid).HasMaxLength(160);
+            entity.Property(f => f.Hash).HasMaxLength(64).IsRequired();
+            entity.Property(f => f.ValidationStatus).HasMaxLength(32).IsRequired();
+            entity.Property(f => f.ErrorMessage).HasMaxLength(2000);
+        });
+
         modelBuilder.Entity<MibImportJob>(entity =>
         {
             entity.HasIndex(j => j.ImportId).IsUnique();
@@ -140,11 +190,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(j => j.Status).HasMaxLength(32).IsRequired();
             entity.Property(j => j.SourceFileName).HasMaxLength(255);
             entity.Property(j => j.ErrorMessage).HasMaxLength(2000);
+            entity.HasOne(j => j.MibSet)
+                  .WithMany()
+                  .HasForeignKey(j => j.MibSetId)
+                  .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<MibNode>(entity =>
         {
-            entity.HasIndex(n => new { n.VersionName, n.NumericOid }).IsUnique();
+            entity.HasIndex(n => new { n.MibSetId, n.NumericOid });
+            entity.HasIndex(n => new { n.MibSetId, n.SymbolicName });
+            entity.HasIndex(n => new { n.VersionName, n.NumericOid });
             entity.HasIndex(n => n.SymbolicName);
             entity.Property(n => n.VersionName).HasMaxLength(160).IsRequired();
             entity.Property(n => n.NumericOid).HasMaxLength(160).IsRequired();
@@ -153,6 +209,22 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(n => n.Syntax).HasMaxLength(80);
             entity.Property(n => n.Access).HasMaxLength(40);
             entity.Property(n => n.Description).HasMaxLength(4000);
+            entity.HasOne(n => n.MibFile)
+                  .WithMany(f => f.Nodes)
+                  .HasForeignKey(n => n.MibFileId)
+                  .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MibSetValidationIssue>(entity =>
+        {
+            entity.HasIndex(i => new { i.MibSetId, i.Severity });
+            entity.HasIndex(i => new { i.MibSetId, i.Code });
+            entity.Property(i => i.Severity).HasMaxLength(32).IsRequired();
+            entity.Property(i => i.Code).HasMaxLength(80).IsRequired();
+            entity.Property(i => i.Message).HasMaxLength(2000).IsRequired();
+            entity.Property(i => i.ModuleName).HasMaxLength(160);
+            entity.Property(i => i.NumericOid).HasMaxLength(160);
+            entity.Property(i => i.SymbolicName).HasMaxLength(240);
         });
 
         modelBuilder.Entity<SnmpTrapLogEntry>(entity =>

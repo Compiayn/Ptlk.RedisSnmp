@@ -7,12 +7,13 @@ namespace Ptlk.RedisSnmp.Services.Mib;
 
 public sealed class MibExportService(AppDbContext db)
 {
-    public async Task<ProjectMibExport> ExportProjectMibAsync(CancellationToken cancellationToken = default)
+    public async Task<ProjectMibExport> ExportProjectMibAsync(int? mibSetId = null, CancellationToken cancellationToken = default)
     {
-        var nodes = await db.MibNodes.AsNoTracking()
-            .Where(node => node.Active)
-            .OrderBy(node => node.NumericOid)
-            .ToListAsync(cancellationToken);
+        var query = db.MibNodes.AsNoTracking();
+        query = mibSetId.HasValue
+            ? query.Where(node => node.MibSetId == mibSetId.Value)
+            : query.Where(node => node.Active);
+        var nodes = await query.OrderBy(node => node.NumericOid).ToListAsync(cancellationToken);
 
         var builder = new StringBuilder();
         builder.AppendLine("PTLK-REDIS-SNMP-MIB DEFINITIONS ::= BEGIN");

@@ -56,6 +56,7 @@ builder.Services.AddScoped<CommandExecutionService>();
 builder.Services.AddScoped<BrowserSnapshotService>();
 builder.Services.AddScoped<LogService>();
 builder.Services.AddScoped<PathSuggestionService>();
+builder.Services.AddScoped<MibSetService>();
 builder.Services.AddScoped<MibImportService>();
 builder.Services.AddScoped<MibLookupService>();
 builder.Services.AddScoped<MibExportService>();

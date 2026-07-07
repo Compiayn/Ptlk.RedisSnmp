@@ -14,6 +14,7 @@ public sealed class SnmpPointService(
         db.SnmpPointConfigs
             .AsNoTracking()
             .Include(p => p.AgentConfig)
+            .Include(p => p.MibSetUsedForMapping)
             .OrderBy(p => p.AgentConfig!.AgentId)
             .ThenBy(p => p.PointName)
             .ToListAsync(cancellationToken);
@@ -36,11 +37,14 @@ public sealed class SnmpPointService(
         entity.NumericOid = numericOid;
         entity.SourcePath = sourcePath;
         entity.ValueType = input.ValueType.Trim();
-        entity.PollEnabled = input.PollEnabled;
-        entity.SetEnabled = input.SetEnabled;
         entity.Access = input.Access.Trim();
         entity.Description = NullIfWhiteSpace(input.Description);
+        entity.MibSetIdUsedForMapping = input.MibSetIdUsedForMapping;
         entity.MibLabel = NullIfWhiteSpace(input.MibLabel);
+        entity.MibModule = NullIfWhiteSpace(input.MibModule);
+        entity.MibSyntax = NullIfWhiteSpace(input.MibSyntax);
+        entity.MibAccess = NullIfWhiteSpace(input.MibAccess);
+        entity.MibDescription = NullIfWhiteSpace(input.MibDescription);
 
         if (input.Id <= 0)
         {
@@ -93,10 +97,6 @@ public sealed class SnmpPointService(
             throw new InvalidOperationException("Access is invalid.");
         }
 
-        if (point.SetEnabled && point.Access == SnmpAccessModes.ReadOnly)
-        {
-            throw new InvalidOperationException("Read-only points cannot enable SNMP Set.");
-        }
     }
 
     private static string? NullIfWhiteSpace(string? value) =>

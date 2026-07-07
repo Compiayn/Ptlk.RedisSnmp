@@ -18,35 +18,94 @@ public sealed class CsvConfigService(
     RedisMappingValidationService mappingValidation)
 {
     private const string Redacted = "__REDACTED__";
+    private static readonly string[] ExportHeaders =
+    [
+        "kind",
+        "name",
+        "version",
+        "agent_id",
+        "display_name",
+        "host",
+        "port",
+        "snmp_version",
+        "preferred_mib_set",
+        "point_name",
+        "numeric_oid",
+        "value_type",
+        "access",
+        "mib_set_used",
+        "mib_label",
+        "mib_module",
+        "mib_syntax",
+        "mib_access",
+        "mib_description",
+        "mapping_source_path",
+        "mapping_redis_key",
+        "trap_oid",
+        "description"
+    ];
 
     public async Task<Stream> ExportAsync(CancellationToken cancellationToken = default)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("kind,name,version,agent_id,display_name,host,port,snmp_version,point_name,numeric_oid,value_type,poll_enabled,set_enabled,access,mapping_source_path,mapping_redis_key,trap_oid,description");
+        builder.AppendLine(Csv(ExportHeaders));
 
         foreach (var credential in await db.SnmpCredentialConfigs.AsNoTracking().OrderBy(c => c.Name).ToListAsync(cancellationToken))
         {
-            builder.AppendLine(Csv("credential", credential.Name, credential.Version, "", "", "", "", "", "", "", "", "", "", "", "", "", "", Redacted));
+            var row = NewExportRow("credential");
+            row[1] = credential.Name;
+            row[2] = credential.Version;
+            row[22] = Redacted;
+            builder.AppendLine(Csv(row));
         }
 
-        foreach (var agent in await db.SnmpAgentConfigs.AsNoTracking().OrderBy(a => a.AgentId).ToListAsync(cancellationToken))
+        foreach (var agent in await db.SnmpAgentConfigs.AsNoTracking().Include(a => a.PreferredMibSet).OrderBy(a => a.AgentId).ToListAsync(cancellationToken))
         {
-            builder.AppendLine(Csv("agent", "", "", agent.AgentId, agent.DisplayName, agent.Host, agent.Port.ToString(), agent.SnmpVersion, "", "", "", "", "", "", "", "", "", agent.Description ?? ""));
+            var row = NewExportRow("agent");
+            row[3] = agent.AgentId;
+            row[4] = agent.DisplayName;
+            row[5] = agent.Host;
+            row[6] = agent.Port.ToString();
+            row[7] = agent.SnmpVersion;
+            row[8] = agent.PreferredMibSet?.Name ?? "";
+            row[22] = agent.Description ?? "";
+            builder.AppendLine(Csv(row));
         }
 
-        foreach (var point in await db.SnmpPointConfigs.AsNoTracking().Include(p => p.AgentConfig).OrderBy(p => p.SourcePath).ToListAsync(cancellationToken))
+        foreach (var point in await db.SnmpPointConfigs.AsNoTracking().Include(p => p.AgentConfig).Include(p => p.MibSetUsedForMapping).OrderBy(p => p.SourcePath).ToListAsync(cancellationToken))
         {
-            builder.AppendLine(Csv("point", "", "", point.AgentConfig?.AgentId ?? "", "", "", "", "", point.PointName, point.NumericOid, point.ValueType, point.PollEnabled.ToString(), point.SetEnabled.ToString(), point.Access, "", "", "", point.Description ?? ""));
+            var row = NewExportRow("point");
+            row[3] = point.AgentConfig?.AgentId ?? "";
+            row[9] = point.PointName;
+            row[10] = point.NumericOid;
+            row[11] = point.ValueType;
+            row[12] = point.Access;
+            row[13] = point.MibSetUsedForMapping?.Name ?? "";
+            row[14] = point.MibLabel ?? "";
+            row[15] = point.MibModule ?? "";
+            row[16] = point.MibSyntax ?? "";
+            row[17] = point.MibAccess ?? "";
+            row[18] = point.MibDescription ?? "";
+            row[22] = point.Description ?? "";
+            builder.AppendLine(Csv(row));
         }
 
         foreach (var rule in await db.SnmpTrapRuleConfigs.AsNoTracking().OrderBy(r => r.AgentId).ThenBy(r => r.TrapOid).ToListAsync(cancellationToken))
         {
-            builder.AppendLine(Csv("trap_rule", "", "", rule.AgentId, rule.DisplayName, "", "", "", "", "", "", "", "", "", "", "", rule.TrapOid, rule.Description ?? ""));
+            var row = NewExportRow("trap_rule");
+            row[3] = rule.AgentId;
+            row[4] = rule.DisplayName;
+            row[21] = rule.TrapOid;
+            row[22] = rule.Description ?? "";
+            builder.AppendLine(Csv(row));
         }
 
         foreach (var mapping in await db.RedisMappings.AsNoTracking().OrderBy(m => m.SourcePath).ToListAsync(cancellationToken))
         {
-            builder.AppendLine(Csv("mapping", "", "", "", "", "", "", "", "", "", "", "", "", "", mapping.SourcePath, mapping.RedisKey, "", ""));
+            var row = NewExportRow("mapping");
+            row[19] = mapping.SourcePath;
+            row[20] = mapping.RedisKey;
+            builder.AppendLine(Csv(row));
         }
 
         return new MemoryStream(Encoding.UTF8.GetBytes(builder.ToString()));
@@ -95,7 +154,9 @@ public sealed class CsvConfigService(
                             DisplayName = Get("display_name"),
                             Host = Get("host"),
                             Port = int.TryParse(Get("port"), out var port) ? port : 161,
-                            SnmpVersion = Get("snmp_version")
+                            SnmpVersion = Get("snmp_version"),
+                            PreferredMibSetId = await ResolveMibSetIdAsync(Get("preferred_mib_set"), cancellationToken),
+                            Description = EmptyToNull(Get("description"))
                         };
                         db.SnmpAgentConfigs.Add(agent);
                         stagedAgents[agent.AgentId] = agent;
@@ -114,9 +175,13 @@ public sealed class CsvConfigService(
                             NumericOid = oid,
                             SourcePath = paths.BuildPointSourcePath(pointAgent.AgentId, oid),
                             ValueType = EmptyDefault(Get("value_type"), "string"),
-                            PollEnabled = !bool.TryParse(Get("poll_enabled"), out var poll) || poll,
-                            SetEnabled = bool.TryParse(Get("set_enabled"), out var set) && set,
                             Access = EmptyDefault(Get("access"), "ro"),
+                            MibSetIdUsedForMapping = await ResolveMibSetIdAsync(Get("mib_set_used"), cancellationToken),
+                            MibLabel = EmptyToNull(Get("mib_label")),
+                            MibModule = EmptyToNull(Get("mib_module")),
+                            MibSyntax = EmptyToNull(Get("mib_syntax")),
+                            MibAccess = EmptyToNull(Get("mib_access")),
+                            MibDescription = EmptyToNull(Get("mib_description")),
                             Description = EmptyToNull(Get("description"))
                         });
                         imported++;
@@ -176,6 +241,14 @@ public sealed class CsvConfigService(
             ? "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\""
             : value));
 
+    private static string[] NewExportRow(string kind)
+    {
+        var row = new string[ExportHeaders.Length];
+        Array.Fill(row, "");
+        row[0] = kind;
+        return row;
+    }
+
     private static string[] SplitCsv(string line)
     {
         var values = new List<string>();
@@ -221,4 +294,22 @@ public sealed class CsvConfigService(
 
     private static string? EmptyToNull(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private async Task<int?> ResolveMibSetIdAsync(string nameOrId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(nameOrId))
+        {
+            return null;
+        }
+        if (int.TryParse(nameOrId, out var id))
+        {
+            return id;
+        }
+
+        return await db.MibSets
+            .AsNoTracking()
+            .Where(s => s.Name == nameOrId.Trim())
+            .Select(s => (int?)s.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
 }

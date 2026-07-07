@@ -1,39 +1,18 @@
 @page "/mib"
 @rendermode InteractiveServer
-@inject MibImportService Importer
+@inject MibSetService MibSets
 @inject MibLookupService Lookup
-@inject MibExportService Exporter
 
 <div class="page-header">
     <div>
-        <h1>MIB</h1>
-        <p class="page-kicker">Optional metadata used for labels, lookup, and exported project MIB text.</p>
+        <h1>MIB Sets</h1>
+        <p class="page-kicker">MIB metadata collections for AgentLink lookup contexts.</p>
     </div>
-    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+    <div class="page-actions">
+        <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+        <button class="btn btn-primary" type="button" @onclick="() => OpenSetDialog()">Add Set</button>
+    </div>
 </div>
-
-<section class="form-band">
-    <div class="row g-3">
-        <div class="col-md-8">
-            <label class="form-label">Version name</label>
-            <input class="form-control" placeholder="default" @bind="versionName" />
-        </div>
-        <div class="col-md-4">
-            <div class="form-check form-switch mt-4">
-                <input class="form-check-input" id="activate-mib" type="checkbox" @bind="activate" />
-                <label class="form-check-label" for="activate-mib">Activate after import</label>
-            </div>
-        </div>
-        <div class="col-12">
-            <label class="form-label">MIB metadata CSV</label>
-            <textarea class="form-control" rows="8" @bind="mibText" placeholder="numeric_oid,symbolic_name,module,syntax,access,description"></textarea>
-            <div class="form-text">This import stores metadata only; Redis mapping still uses numeric source paths.</div>
-        </div>
-    </div>
-    <div class="mt-3">
-        <button class="btn btn-primary" type="button" @onclick="ImportAsync" disabled="@isImporting">Import Text</button>
-    </div>
-</section>
 
 @if (!string.IsNullOrWhiteSpace(message))
 {
@@ -42,23 +21,18 @@
 
 <div class="toolbar">
     <div>
-        <h2 class="toolbar-title">Active Nodes</h2>
-        <div class="muted-metadata">Rows shown here are a manual snapshot of active metadata.</div>
+        <h2 class="toolbar-title">MIB Set List</h2>
+        <div class="muted-metadata">Selectable sets are used by AgentLink, Walk, Trap labels, and generated point metadata.</div>
     </div>
 </div>
 
-@if (lastLoaded is not null)
-{
-    <div class="muted-metadata mb-3">Snapshot refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
-}
-
 @if (isLoading)
 {
-    <div class="empty-state">Loading active MIB nodes...</div>
+    <div class="empty-state">Loading MIB sets...</div>
 }
-else if (nodes.Count == 0)
+else if (sets.Count == 0)
 {
-    <div class="empty-state">No active MIB nodes are available. Numeric OID polling and mapping can still be configured.</div>
+    <div class="empty-state">No MIB sets are configured.</div>
 }
 else
 {
@@ -66,20 +40,37 @@ else
         <table class="table table-sm data-table align-middle">
             <thead>
                 <tr>
-                    <th>OID</th>
-                    <th>Symbol</th>
-                    <th>Syntax</th>
-                    <th>Access</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th class="numeric">Files</th>
+                    <th class="numeric">Nodes</th>
+                    <th class="numeric">Issues</th>
+                    <th class="numeric">Refs</th>
+                    <th class="numeric">Updated</th>
+                    <th class="actions">Actions</th>
                 </tr>
             </thead>
             <tbody>
-            @foreach (var node in nodes)
+            @foreach (var item in sets)
             {
-                <tr>
-                    <td><code>@node.NumericOid</code></td>
-                    <td>@(node.SymbolicName ?? "-")</td>
-                    <td>@(node.Syntax ?? "-")</td>
-                    <td><span class="status-badge neutral">@(node.Access ?? "-")</span></td>
+                <tr class="@(selectedSetId == item.Id ? "selected-row" : null)">
+                    <td>
+                        <div>@item.Name</div>
+                        <small>@(item.Description ?? "-")</small>
+                    </td>
+                    <td><span class="@SetStatusBadgeClass(item.Status)">@item.Status</span></td>
+                    <td class="numeric">@item.FileCount</td>
+                    <td class="numeric">@item.NodeCount</td>
+                    <td class="numeric">
+                        <span class="@IssueBadgeClass(item.ErrorCount)">@item.IssueCount</span>
+                    </td>
+                    <td class="numeric">@(item.AgentReferenceCount + item.PointReferenceCount)</td>
+                    <td class="numeric">@FormatDate(item.UpdatedAt)</td>
+                    <td class="actions">
+                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => SelectSetAsync(item.Id)">Select</button>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenSetDialog(item)">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenSetDeleteDialog(item)">Delete</button>
+                    </td>
                 </tr>
             }
             </tbody>
@@ -87,48 +78,465 @@ else
     </div>
 }
 
+@if (detailDialogOpen && selectedSet is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseDetailDialog"></div>
+    <div class="dialog-panel extra-wide mib-detail-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@selectedSet.Name</h2>
+                <div class="muted-metadata">Status: @selectedSet.Status / @nodes.Count node(s) / @issues.Count validation issue(s)</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseDetailDialog"></button>
+        </div>
+        <div class="dialog-body">
+            @if (!string.IsNullOrWhiteSpace(detailMessage))
+            {
+                <div class="@DetailAlertClass">@detailMessage</div>
+            }
+
+            <div class="page-actions mb-3">
+                <button class="btn btn-outline-secondary" type="button" @onclick="OpenBaseMibDialogAsync">View Base MIBs</button>
+                <button class="btn btn-primary" type="button" @onclick="() => ValidateAndUpdateSnapshotAsync(selectedSet.Id)">Validate and Update Snapshot</button>
+            </div>
+
+            @if (references.Count > 0)
+            {
+                <section class="surface">
+                    <h2 class="mt-0">References</h2>
+                    <div class="table-responsive">
+                        <table class="table table-sm data-table align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Kind</th>
+                                    <th>Name</th>
+                                    <th>Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var reference in references)
+                            {
+                                <tr>
+                                    <td><span class="status-badge neutral">@reference.Kind</span></td>
+                                    <td>@reference.Name</td>
+                                    <td>@reference.Detail</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            }
+
+            <section class="form-band">
+                <h2 class="mt-0">Upload MIB Files</h2>
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-8">
+                        <label class="form-label">MIB files</label>
+                        <InputFile class="form-control" OnChange="OnMibFilesSelected" multiple />
+                        @if (selectedMibUploads.Count > 0)
+                        {
+                            <div class="muted-metadata mt-2">@selectedMibUploads.Count file(s) selected</div>
+                            <ul class="compact-list">
+                                @foreach (var file in selectedMibUploads)
+                                {
+                                    <li>@file.Name / @file.Size bytes</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                    <div class="col-md-4">
+                        <button class="btn btn-primary w-100" type="button" @onclick="UploadMibFilesAsync" disabled="@(isImporting || selectedMibUploads.Count == 0)">Upload MIB Files</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="surface">
+                <h2 class="mt-0">Files</h2>
+                @if (files.Count == 0)
+                {
+                    <div class="empty-state">No files are stored in this set.</div>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-sm data-table align-middle">
+                            <thead>
+                                <tr>
+                                    <th>File</th>
+                                    <th>Module</th>
+                                    <th>Status</th>
+                                    <th>Hash</th>
+                                    <th class="numeric">Updated</th>
+                                    <th class="actions">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var file in files)
+                            {
+                                <tr>
+                                    <td>@file.FileName</td>
+                                    <td>@(file.ModuleName ?? "-")</td>
+                                    <td><span class="@FileStatusBadgeClass(file.ValidationStatus)">@file.ValidationStatus</span></td>
+                                    <td><code>@ShortHash(file.Hash)</code></td>
+                                    <td class="numeric">@FormatDate(file.UpdatedAt)</td>
+                                    <td class="actions">
+                                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => ViewFileAsync(file)">View</button>
+                                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenDeleteFileDialog(file)">Delete</button>
+                                    </td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+
+            <section class="surface">
+                <h2 class="mt-0">Validation Issues</h2>
+                @if (issues.Count == 0)
+                {
+                    <div class="empty-state">No validation issues are recorded.</div>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-sm data-table align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Severity</th>
+                                    <th>Code</th>
+                                    <th>OID</th>
+                                    <th>Symbol</th>
+                                    <th>Message</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var issue in issues)
+                            {
+                                <tr>
+                                    <td><span class="@IssueSeverityBadgeClass(issue.Severity)">@issue.Severity</span></td>
+                                    <td><code>@issue.Code</code></td>
+                                    <td><code>@(issue.NumericOid ?? "-")</code></td>
+                                    <td>@(issue.SymbolicName ?? "-")</td>
+                                    <td>@issue.Message</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+
+            <section class="surface">
+                <h2 class="mt-0">Nodes</h2>
+                @if (nodes.Count == 0)
+                {
+                    <div class="empty-state">No nodes are available in this set.</div>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-sm data-table align-middle">
+                            <thead>
+                                <tr>
+                                    <th>OID</th>
+                                    <th>Symbol</th>
+                                    <th>Module</th>
+                                    <th>Syntax</th>
+                                    <th>Access</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var node in nodes.Take(500))
+                            {
+                                <tr>
+                                    <td><code>@node.NumericOid</code></td>
+                                    <td>@(node.SymbolicName ?? "-")</td>
+                                    <td>@(node.ModuleName ?? "-")</td>
+                                    <td>@(node.Syntax ?? "-")</td>
+                                    <td><span class="status-badge neutral">@(node.Access ?? "-")</span></td>
+                                    <td>@(node.Description ?? "-")</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                    @if (nodes.Count > 500)
+                    {
+                        <div class="muted-metadata">Showing first 500 node(s).</div>
+                    }
+                }
+            </section>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseDetailDialog">Close</button>
+        </div>
+    </div>
+}
+
+@if (baseMibDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseBaseMibDialog"></div>
+    <div class="dialog-panel extra-wide" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">Base MIBs</h2>
+                <div class="muted-metadata">@defaultMibFiles.Count file(s) scanned from Resources/DefaultMibs.</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseBaseMibDialog"></button>
+        </div>
+        <div class="dialog-body">
+            @if (defaultMibFiles.Count == 0)
+            {
+                <div class="empty-state">No base MIB files are available.</div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm data-table align-middle">
+                        <thead>
+                            <tr>
+                                <th>File</th>
+                                <th>Folder</th>
+                                <th class="numeric">Size</th>
+                                <th class="numeric">Updated</th>
+                                <th class="actions">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var file in defaultMibFiles)
+                        {
+                            <tr>
+                                <td>@file.FileName</td>
+                                <td><code>@(string.IsNullOrWhiteSpace(file.RelativeDirectory) ? "." : file.RelativeDirectory)</code></td>
+                                <td class="numeric">@FormatBytes(file.Size)</td>
+                                <td class="numeric">@FormatDate(file.UpdatedAt)</td>
+                                <td class="actions">
+                                    <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => ViewDefaultMibFileAsync(file)">View</button>
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-primary" type="button" @onclick="CloseBaseMibDialog">Close</button>
+        </div>
+    </div>
+}
+
+@if (setDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseSetDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@((editingSet.Id > 0) ? "Edit MIB Set" : "Add MIB Set")</h2>
+                <div class="muted-metadata">Status: @editingSet.Status</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseSetDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="row g-3">
+                <div class="col-md-8">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="editingSet.Name" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Status</label>
+                    <div><span class="@SetStatusBadgeClass(editingSet.Status)">@editingSet.Status</span></div>
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="3" @bind="editingSet.Description"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseSetDialog">Cancel</button>
+            <button class="btn btn-primary" type="button" @onclick="SaveSetAsync">Save</button>
+        </div>
+    </div>
+}
+
+@if (deletingSet is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseSetDeleteDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">Delete MIB Set</h2>
+                <div class="muted-metadata">@deletingSet.Name</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseSetDeleteDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <p>Delete this MIB set and its files, validation issues, and node snapshot?</p>
+            <div class="muted-metadata">Referenced sets are protected and will show the blocking agent or point references.</div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseSetDeleteDialog">Cancel</button>
+            <button class="btn btn-danger" type="button" @onclick="ConfirmDeleteSetAsync">Delete</button>
+        </div>
+    </div>
+}
+
+@if (setDeleteBlockedDialogOpen && blockedDeleteSet is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseSetDeleteBlockedDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">MIB Set Is Referenced</h2>
+                <div class="muted-metadata">@blockedDeleteSet.Name</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseSetDeleteBlockedDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="alert alert-warning">
+                This MIB set is referenced by @setDeleteReferences.Count agent or point item(s), so it was not deleted.
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm data-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Kind</th>
+                            <th>Name</th>
+                            <th>Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var reference in setDeleteReferences)
+                    {
+                        <tr>
+                            <td><span class="status-badge neutral">@reference.Kind</span></td>
+                            <td>@reference.Name</td>
+                            <td>@reference.Detail</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-primary" type="button" @onclick="CloseSetDeleteBlockedDialog">Close</button>
+        </div>
+    </div>
+}
+
+@if (fileViewOpen && !string.IsNullOrWhiteSpace(viewFileTitle))
+{
+    <div class="dialog-backdrop" @onclick="CloseFileView"></div>
+    <div class="dialog-panel extra-wide" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@viewFileTitle</h2>
+                <div class="muted-metadata">@viewFileSubtitle</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseFileView"></button>
+        </div>
+        <div class="dialog-body">
+            <pre class="file-preview">@viewFileContent</pre>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-primary" type="button" @onclick="CloseFileView">Close</button>
+        </div>
+    </div>
+}
+
+@if (deleteFileDialogOpen && deletingFile is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseDeleteFileDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">Delete MIB File</h2>
+                <div class="muted-metadata">@deletingFile.FileName</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseDeleteFileDialog"></button>
+        </div>
+        <div class="dialog-body">
+            @if (references.Count > 0)
+            {
+                <div class="alert alert-warning">
+                    This MIB set is referenced by @references.Count agent or point item(s). Existing lookup snapshot remains until the next successful snapshot update.
+                </div>
+            }
+            <p class="mb-0">Delete the stored file and its file metadata?</p>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseDeleteFileDialog">Cancel</button>
+            <button class="btn btn-danger" type="button" @onclick="ConfirmDeleteFileAsync">Delete</button>
+        </div>
+    </div>
+}
+
 @code {
-    private string versionName = "default";
-    private string mibText = "";
-    private bool activate = true;
-    private string? message;
-    private bool messageIsError;
+    private const long MaxMibUploadBytes = 25 * 1024 * 1024;
+    private const int MaxMibUploadCount = 50;
+    private List<MibSetSummary> sets = [];
+    private MibSet? selectedSet;
+    private int? selectedSetId;
+    private List<MibFile> files = [];
+    private List<MibSetValidationIssue> issues = [];
+    private List<MibSetReference> references = [];
+    private IReadOnlyList<MibLookupResult> nodes = [];
+    private List<DefaultMibFileSummary> defaultMibFiles = [];
+    private MibSet editingSet = NewSet();
+    private List<IBrowserFile> selectedMibUploads = [];
+    private string? viewFileTitle;
+    private string? viewFileSubtitle;
+    private string viewFileContent = "";
+    private bool fileViewOpen;
+    private bool baseMibDialogOpen;
+    private MibFile? deletingFile;
+    private bool deleteFileDialogOpen;
+    private MibSetSummary? deletingSet;
+    private MibSetSummary? blockedDeleteSet;
+    private List<MibSetReference> setDeleteReferences = [];
+    private bool setDeleteBlockedDialogOpen;
+    private bool detailDialogOpen;
+    private bool setDialogOpen;
     private bool isLoading;
     private bool isImporting;
-    private DateTimeOffset? lastLoaded;
-    private IReadOnlyList<MibLookupResult> nodes = [];
+    private string? message;
+    private bool messageIsError;
+    private string? detailMessage;
+    private bool detailMessageIsError;
 
     private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
+    private string DetailAlertClass => detailMessageIsError ? "alert alert-danger" : "alert alert-info";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
-
-    private async Task ImportAsync()
-    {
-        try
-        {
-            isImporting = true;
-            var result = await Importer.ImportTextAsync(versionName, "ui-text.csv", mibText, activate);
-            SetMessage(result.Success ? $"Imported {result.NodeCount} node(s)." : string.Join("; ", result.Errors), !result.Success);
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            SetMessage(ex.Message, isError: true);
-        }
-        finally
-        {
-            isImporting = false;
-        }
-    }
 
     private async Task LoadAsync()
     {
         try
         {
             isLoading = true;
-            nodes = await Lookup.ListActiveAsync();
-            _ = await Exporter.ExportProjectMibAsync();
-            lastLoaded = DateTimeOffset.Now;
+            sets = await MibSets.ListAsync();
+            if (selectedSetId is not null && sets.All(s => s.Id != selectedSetId))
+            {
+                selectedSetId = null;
+                detailDialogOpen = false;
+            }
+
+            if (detailDialogOpen && selectedSetId is not null)
+            {
+                await LoadSetDetailAsync(selectedSetId.Value);
+            }
+            else
+            {
+                selectedSet = null;
+                files = [];
+                issues = [];
+                references = [];
+                nodes = [];
+            }
         }
         catch (Exception ex)
         {
@@ -140,9 +548,352 @@ else
         }
     }
 
+    private async Task SelectSetAsync(int mibSetId)
+    {
+        selectedSetId = mibSetId;
+        await LoadSetDetailAsync(mibSetId);
+        detailDialogOpen = true;
+    }
+
+    private void CloseDetailDialog()
+    {
+        detailDialogOpen = false;
+        selectedMibUploads = [];
+        fileViewOpen = false;
+        baseMibDialogOpen = false;
+        deleteFileDialogOpen = false;
+        defaultMibFiles = [];
+        viewFileTitle = null;
+        viewFileSubtitle = null;
+        deletingFile = null;
+        deletingSet = null;
+        setDeleteBlockedDialogOpen = false;
+        blockedDeleteSet = null;
+        setDeleteReferences = [];
+        viewFileContent = "";
+        detailMessage = null;
+    }
+
+    private async Task LoadSetDetailAsync(int mibSetId)
+    {
+        selectedSet = await MibSets.GetAsync(mibSetId);
+        files = await MibSets.ListFilesAsync(mibSetId);
+        issues = await MibSets.ListIssuesAsync(mibSetId);
+        references = await MibSets.ListReferencesAsync(mibSetId);
+        nodes = await Lookup.ListBySetAsync(mibSetId);
+    }
+
+    private void OpenSetDialog(MibSetSummary? item = null)
+    {
+        editingSet = item is null
+            ? NewSet()
+            : new MibSet
+            {
+                Id = item.Id,
+                Name = item.Name,
+                Description = item.Description,
+                Status = item.Status
+            };
+        setDialogOpen = true;
+    }
+
+    private void CloseSetDialog() => setDialogOpen = false;
+
+    private void OpenSetDeleteDialog(MibSetSummary item) => deletingSet = item;
+
+    private void CloseSetDeleteDialog() => deletingSet = null;
+
+    private async Task ConfirmDeleteSetAsync()
+    {
+        if (deletingSet is null)
+        {
+            return;
+        }
+
+        var item = deletingSet;
+        try
+        {
+            var result = await MibSets.DeleteAsync(item.Id);
+            CloseSetDeleteDialog();
+            if (!result.Success)
+            {
+                blockedDeleteSet = item;
+                setDeleteReferences = result.References.ToList();
+                setDeleteBlockedDialogOpen = true;
+                return;
+            }
+
+            if (selectedSetId == item.Id)
+            {
+                CloseDetailDialog();
+                selectedSetId = null;
+            }
+
+            SetMessage($"MIB set {item.Name} deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            CloseSetDeleteDialog();
+            SetMessage(ex.Message, isError: true);
+        }
+    }
+
+    private void CloseSetDeleteBlockedDialog()
+    {
+        setDeleteBlockedDialogOpen = false;
+        blockedDeleteSet = null;
+        setDeleteReferences = [];
+    }
+
+    private async Task SaveSetAsync()
+    {
+        try
+        {
+            var saved = await MibSets.CreateOrUpdateAsync(editingSet);
+            selectedSetId = saved.Id;
+            setDialogOpen = false;
+            SetMessage("MIB set saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+    }
+
+    private void OnMibFilesSelected(InputFileChangeEventArgs args)
+    {
+        try
+        {
+            selectedMibUploads = args.GetMultipleFiles(MaxMibUploadCount).ToList();
+            detailMessage = null;
+        }
+        catch (Exception ex)
+        {
+            selectedMibUploads = [];
+            SetDetailMessage(ex.Message, isError: true);
+        }
+    }
+
+    private async Task UploadMibFilesAsync()
+    {
+        if (selectedSet is null || selectedMibUploads.Count == 0)
+        {
+            return;
+        }
+
+        var uploaded = new List<string>();
+        var failures = new List<string>();
+        try
+        {
+            isImporting = true;
+            foreach (var upload in selectedMibUploads)
+            {
+                try
+                {
+                    await using var stream = upload.OpenReadStream(MaxMibUploadBytes);
+                    var file = await MibSets.UploadMibFileAsync(selectedSet.Id, upload.Name, stream);
+                    uploaded.Add(file.FileName);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{upload.Name}: {ex.Message}");
+                }
+            }
+
+            selectedMibUploads = [];
+            if (failures.Count > 0)
+            {
+                SetDetailMessage($"Uploaded {uploaded.Count} file(s); {failures.Count} failed. {string.Join(" ", failures.Take(3))}", isError: true);
+            }
+            else
+            {
+                SetDetailMessage($"Uploaded {uploaded.Count} file(s).");
+            }
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetDetailMessage(ex.Message, isError: true);
+        }
+        finally
+        {
+            isImporting = false;
+        }
+    }
+
+    private async Task ViewFileAsync(MibFile file)
+    {
+        if (selectedSet is null)
+        {
+            return;
+        }
+
+        try
+        {
+            viewFileTitle = file.FileName;
+            viewFileSubtitle = "Read-only uploaded MIB source.";
+            viewFileContent = await MibSets.ReadFileContentAsync(selectedSet.Id, file.Id);
+            fileViewOpen = true;
+        }
+        catch (Exception ex)
+        {
+            SetDetailMessage(ex.Message, isError: true);
+        }
+    }
+
+    private async Task OpenBaseMibDialogAsync()
+    {
+        try
+        {
+            defaultMibFiles = await MibSets.ListDefaultMibFilesAsync();
+            baseMibDialogOpen = true;
+        }
+        catch (Exception ex)
+        {
+            SetDetailMessage(ex.Message, isError: true);
+        }
+    }
+
+    private void CloseBaseMibDialog()
+    {
+        baseMibDialogOpen = false;
+        defaultMibFiles = [];
+    }
+
+    private async Task ViewDefaultMibFileAsync(DefaultMibFileSummary file)
+    {
+        try
+        {
+            viewFileTitle = file.FileName;
+            viewFileSubtitle = string.IsNullOrWhiteSpace(file.RelativeDirectory)
+                ? "Read-only base MIB source."
+                : $"Read-only base MIB source: {file.RelativeDirectory}.";
+            viewFileContent = await MibSets.ReadDefaultMibFileContentAsync(file.RelativePath);
+            fileViewOpen = true;
+        }
+        catch (Exception ex)
+        {
+            SetDetailMessage(ex.Message, isError: true);
+        }
+    }
+
+    private void CloseFileView()
+    {
+        fileViewOpen = false;
+        viewFileTitle = null;
+        viewFileSubtitle = null;
+        viewFileContent = "";
+    }
+
+    private void OpenDeleteFileDialog(MibFile file)
+    {
+        deletingFile = file;
+        deleteFileDialogOpen = true;
+    }
+
+    private void CloseDeleteFileDialog()
+    {
+        deleteFileDialogOpen = false;
+        deletingFile = null;
+    }
+
+    private async Task ConfirmDeleteFileAsync()
+    {
+        if (selectedSet is null || deletingFile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await MibSets.DeleteFileAsync(selectedSet.Id, deletingFile.Id);
+            SetDetailMessage($"Deleted {deletingFile.FileName}.");
+            CloseDeleteFileDialog();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetDetailMessage(ex.Message, isError: true);
+        }
+    }
+
+    private async Task ValidateAndUpdateSnapshotAsync(int mibSetId)
+    {
+        try
+        {
+            var result = await MibSets.ValidateAndUpdateSnapshotAsync(mibSetId);
+            SetDetailMessage(result.Success
+                ? $"Snapshot updated with {result.NodeCount} node(s)."
+                : $"Snapshot was not updated because validation recorded {result.ErrorCount} error(s).",
+                !result.Success);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetDetailMessage(ex.Message, isError: true);
+        }
+    }
+
     private void SetMessage(string value, bool isError = false)
     {
         message = value;
         messageIsError = isError;
     }
+
+    private void SetDetailMessage(string value, bool isError = false)
+    {
+        detailMessage = value;
+        detailMessageIsError = isError;
+    }
+
+    private static MibSet NewSet() => new() { Status = MibSetStatuses.Draft };
+
+    private static string SetStatusBadgeClass(string? status)
+    {
+        var normalized = status?.ToLowerInvariant();
+        return normalized switch
+        {
+            MibSetStatuses.Available => "status-badge success",
+            MibSetStatuses.SnapshotStale => "status-badge warning",
+            MibSetStatuses.Draft => "status-badge neutral",
+            _ => "status-badge neutral"
+        };
+    }
+
+    private static string FileStatusBadgeClass(string? status)
+    {
+        var normalized = status?.ToLowerInvariant();
+        return normalized switch
+        {
+            MibFileValidationStatuses.Parsed or MibFileValidationStatuses.Validated => "status-badge success",
+            MibFileValidationStatuses.Failed => "status-badge danger",
+            _ => "status-badge neutral"
+        };
+    }
+
+    private static string IssueSeverityBadgeClass(string? severity)
+    {
+        var normalized = severity?.ToLowerInvariant();
+        return normalized switch
+        {
+            MibValidationSeverities.Info => "status-badge success",
+            MibValidationSeverities.Warning => "status-badge warning",
+            MibValidationSeverities.Error => "status-badge danger",
+            _ => "status-badge neutral"
+        };
+    }
+
+    private static string IssueBadgeClass(int errorCount) =>
+        errorCount > 0 ? "status-badge danger" : "status-badge neutral";
+
+    private static string FormatDate(DateTime value) =>
+        value == default ? "-" : value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
+    private static string FormatBytes(long value) =>
+        value < 1024 ? $"{value} B" : $"{value / 1024.0:N1} KB";
+
+    private static string ShortHash(string value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value[..Math.Min(12, value.Length)];
 }

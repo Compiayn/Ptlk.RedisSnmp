@@ -19,6 +19,13 @@ public static class SnmpAccessModes
     public const string ReadOnly = "ro";
     public const string ReadWrite = "rw";
     public const string WriteOnly = "wo";
+
+    public static bool CanRead(string? access) =>
+        !string.Equals(access, WriteOnly, StringComparison.OrdinalIgnoreCase);
+
+    public static bool CanWrite(string? access) =>
+        string.Equals(access, ReadWrite, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(access, WriteOnly, StringComparison.OrdinalIgnoreCase);
 }
 
 public static class SnmpValueTypes

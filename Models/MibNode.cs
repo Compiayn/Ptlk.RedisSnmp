@@ -3,6 +3,10 @@ namespace Ptlk.RedisSnmp.Models;
 public sealed class MibNode
 {
     public int Id { get; set; }
+    public int? MibSetId { get; set; }
+    public MibSet? MibSet { get; set; }
+    public int? MibFileId { get; set; }
+    public MibFile? MibFile { get; set; }
     public string VersionName { get; set; } = "";
     public string NumericOid { get; set; } = "";
     public string? SymbolicName { get; set; }

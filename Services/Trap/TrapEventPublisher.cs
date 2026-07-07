@@ -20,16 +20,27 @@ public sealed class TrapEventPublisher(
         CancellationToken cancellationToken = default)
     {
         var agentId = message.AgentId;
+        int? mibSetId = null;
         if (agentId == "unknown")
         {
-            agentId = await ResolveAgentIdAsync(message.SourceAddress, cancellationToken) ?? "unknown";
+            var context = await ResolveAgentContextBySourceAsync(message.SourceAddress, cancellationToken);
+            agentId = context.AgentId ?? "unknown";
+            mibSetId = context.PreferredMibSetId;
+        }
+        else
+        {
+            mibSetId = await db.SnmpAgentConfigs.AsNoTracking()
+                .Where(a => a.AgentId == agentId)
+                .Select(a => a.PreferredMibSetId)
+                .FirstOrDefaultAsync(cancellationToken);
         }
 
         var labeled = new List<SnmpTrapVarbind>();
         var labels = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (var varbind in message.Varbinds)
         {
-            var lookup = await mibLookup.LookupAsync(varbind.Oid, cancellationToken);
+            var lookup = await mibLookup.LookupAsync(mibSetId, varbind.Oid, cancellationToken)
+                ?? await mibLookup.LookupAsync(varbind.Oid, cancellationToken);
             labels[varbind.Oid] = lookup?.SymbolicName;
             labeled.Add(varbind with { Label = lookup?.SymbolicName });
         }
@@ -51,11 +62,11 @@ public sealed class TrapEventPublisher(
         return enriched;
     }
 
-    private async Task<string?> ResolveAgentIdAsync(string sourceAddress, CancellationToken cancellationToken)
+    private async Task<(string? AgentId, int? PreferredMibSetId)> ResolveAgentContextBySourceAsync(string sourceAddress, CancellationToken cancellationToken)
     {
         var host = sourceAddress.Split(':', StringSplitOptions.TrimEntries).FirstOrDefault() ?? sourceAddress;
         var agent = await db.SnmpAgentConfigs.AsNoTracking()
             .FirstOrDefaultAsync(a => a.Host == host, cancellationToken);
-        return agent?.AgentId;
+        return (agent?.AgentId, agent?.PreferredMibSetId);
     }
 }

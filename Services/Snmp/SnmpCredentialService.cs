@@ -7,7 +7,8 @@ using Ptlk.RedisSnmp.Models;
 namespace Ptlk.RedisSnmp.Services.Snmp;
 
 public sealed record SnmpCredentialSecrets(
-    string? Community,
+    string? ReadCommunity,
+    string? WriteCommunity,
     string? AuthPassword,
     string? PrivPassword);
 
@@ -41,9 +42,13 @@ public sealed class SnmpCredentialService(
         entity.PrivProtocol = NullIfWhiteSpace(input.PrivProtocol);
         entity.Description = NullIfWhiteSpace(input.Description);
 
-        if (!string.IsNullOrWhiteSpace(secrets.Community))
+        if (!string.IsNullOrWhiteSpace(secrets.ReadCommunity))
         {
-            entity.ProtectedCommunity = _protector.Protect(secrets.Community);
+            entity.ProtectedReadCommunity = _protector.Protect(secrets.ReadCommunity);
+        }
+        if (!string.IsNullOrWhiteSpace(secrets.WriteCommunity))
+        {
+            entity.ProtectedWriteCommunity = _protector.Protect(secrets.WriteCommunity);
         }
         if (!string.IsNullOrWhiteSpace(secrets.AuthPassword))
         {
@@ -77,7 +82,8 @@ public sealed class SnmpCredentialService(
 
     public SnmpCredentialSecrets RevealSecrets(SnmpCredentialConfig credential) =>
         new(
-            UnprotectOrNull(credential.ProtectedCommunity),
+            UnprotectOrNull(credential.ProtectedReadCommunity) ?? UnprotectOrNull(credential.ProtectedCommunity),
+            UnprotectOrNull(credential.ProtectedWriteCommunity) ?? UnprotectOrNull(credential.ProtectedCommunity),
             UnprotectOrNull(credential.ProtectedAuthPassword),
             UnprotectOrNull(credential.ProtectedPrivPassword));
 

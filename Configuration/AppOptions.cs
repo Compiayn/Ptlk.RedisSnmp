@@ -40,6 +40,7 @@ public sealed class SnmpRuntimeOptions
 {
     public int DefaultPollingRateMs { get; set; } = 1000;
     public int DefaultTimeoutMs { get; set; } = 5000;
+    public int DefaultWalkTimeoutMs { get; set; } = 60000;
     public int DefaultRetryCount { get; set; } = 1;
 }
 
@@ -47,6 +48,7 @@ public sealed class NetSnmpOptions
 {
     public string ToolsPath { get; set; } = "";
     public string MibDirectory { get; set; } = "/data/mibs";
+    public string DefaultMibDirectory { get; set; } = "";
     public string WorkDirectory { get; set; } = "/data/snmp";
 }
 
@@ -112,6 +114,7 @@ public static class OptionsRegistration
             .Bind(configuration.GetSection("SnmpRuntime"))
             .Validate(o => o.DefaultPollingRateMs >= 100
                            && o.DefaultTimeoutMs > 0
+                           && o.DefaultWalkTimeoutMs > 0
                            && o.DefaultRetryCount >= 0,
                 "SnMP runtime options are invalid.")
             .ValidateOnStart();

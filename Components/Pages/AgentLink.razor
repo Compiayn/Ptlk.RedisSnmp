@@ -3,6 +3,10 @@
 @inject SnmpCredentialService Credentials
 @inject SnmpAgentService Agents
 @inject SnmpPointService Points
+@inject SnmpClientService SnmpClient
+@inject MibSetService MibSets
+@inject MibLookupService MibLookup
+@inject SnmpSourcePathService Paths
 
 <div class="page-header">
     <div>
@@ -84,6 +88,7 @@ else
                     <th>Display name</th>
                     <th>Endpoint</th>
                     <th>Credential</th>
+                    <th>Preferred MIB</th>
                     <th>Status</th>
                     <th class="numeric">Poll ms</th>
                     <th class="numeric">Points</th>
@@ -93,70 +98,20 @@ else
             <tbody>
             @foreach (var item in agents)
             {
-                <tr>
+                <tr class='@(generateDialogOpen && generateAgent?.Id == item.Id ? "selected-row" : null)'>
                     <td><code>@item.AgentId</code></td>
                     <td>@item.DisplayName</td>
                     <td>@item.Host:@item.Port</td>
                     <td>@(item.CredentialConfig?.Name ?? "-")</td>
+                    <td>@MibSetName(item.PreferredMibSetId)</td>
                     <td><span class="@StatusBadgeClass(item.Enabled ? "normal" : "disabled")">@(item.Enabled ? "enabled" : "disabled")</span></td>
                     <td class="numeric">@item.PollingRateMs</td>
                     <td class="numeric">@item.Points.Count</td>
                     <td class="actions">
+                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => OpenWalkDialog(item)">Walk</button>
+                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => OpenGenerateDialog(item)">Edit Points</button>
                         <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenAgentDialog(item)">Edit</button>
                         <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenAgentDeleteDialog(item)">Delete</button>
-                    </td>
-                </tr>
-            }
-            </tbody>
-        </table>
-    </div>
-}
-
-<div class="toolbar">
-    <div>
-        <h2 class="toolbar-title">Points</h2>
-        <div class="muted-metadata">Source paths are generated from agent ID and normalized numeric OID.</div>
-    </div>
-    <button class="btn btn-primary" type="button" @onclick="() => OpenPointDialog()" disabled="@(agents.Count == 0)">Add Point</button>
-</div>
-
-@if (points.Count == 0)
-{
-    <div class="empty-state">No SNMP points are configured.</div>
-}
-else
-{
-    <div class="table-responsive">
-        <table class="table table-sm data-table align-middle">
-            <thead>
-                <tr>
-                    <th>Point</th>
-                    <th>Agent</th>
-                    <th>OID</th>
-                    <th>Value type</th>
-                    <th>Access</th>
-                    <th>Polling</th>
-                    <th>Set</th>
-                    <th class="actions">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-            @foreach (var item in points)
-            {
-                <tr>
-                    <td>
-                        <div>@item.PointName</div>
-                        <small>@item.SourcePath</small>
-                    </td>
-                    <td>@(item.AgentConfig?.AgentId ?? "-")</td>
-                    <td><code>@item.NumericOid</code></td>
-                    <td>@item.ValueType</td>
-                    <td><span class="status-badge neutral">@item.Access</span></td>
-                    <td><span class="@StatusBadgeClass(item.PollEnabled ? "normal" : "disabled")">@(item.PollEnabled ? "enabled" : "disabled")</span></td>
-                    <td><span class="@StatusBadgeClass(item.SetEnabled ? "normal" : "disabled")">@(item.SetEnabled ? "enabled" : "disabled")</span></td>
-                    <td class="actions">
-                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenPointDialog(item)">Edit</button>
-                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenPointDeleteDialog(item)">Delete</button>
                     </td>
                 </tr>
             }
@@ -193,9 +148,14 @@ else
                 @if (credential.Version == SnmpVersions.V1 || credential.Version == SnmpVersions.V2C)
                 {
                     <div class="col-12">
-                        <label class="form-label">Community</label>
-                        <input class="form-control" type="password" @bind="community" autocomplete="new-password" />
-                        <div class="form-text">Leave blank while editing to keep the stored community.</div>
+                        <label class="form-label">Read community</label>
+                        <input class="form-control" type="password" @bind="readCommunity" autocomplete="new-password" />
+                        <div class="form-text">Used by SNMP Get and Walk. Leave blank while editing to keep the stored value.</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Write community</label>
+                        <input class="form-control" type="password" @bind="writeCommunity" autocomplete="new-password" />
+                        <div class="form-text">Used by SNMP Set. Leave blank while editing to keep the stored value.</div>
                     </div>
                 }
                 @if (credential.Version == SnmpVersions.V3)
@@ -273,6 +233,16 @@ else
                         }
                     </select>
                 </div>
+                <div class="col-md-4">
+                    <label class="form-label">Preferred MIB Set</label>
+                    <select class="form-select" @bind="agent.PreferredMibSetId">
+                        <option value="">Numeric OID only</option>
+                        @foreach (var item in mibSetOptions)
+                        {
+                            <option value="@item.Id">@item.Name (@item.Status)</option>
+                        }
+                    </select>
+                </div>
                 <div class="col-md-6">
                     <label class="form-label">Host</label>
                     <input class="form-control" @bind="agent.Host" />
@@ -322,8 +292,8 @@ else
 
 @if (pointDialogOpen)
 {
-    <div class="dialog-backdrop" @onclick="ClosePointDialog"></div>
-    <div class="dialog-panel wide" role="dialog" aria-modal="true">
+    <div class="dialog-backdrop nested-dialog-backdrop" @onclick="ClosePointDialog"></div>
+    <div class="dialog-panel wide nested-dialog-panel" role="dialog" aria-modal="true">
         <div class="dialog-header">
             <div>
                 <h2 class="m-0">@((point.Id > 0) ? "Edit Point" : "Add Point")</h2>
@@ -335,7 +305,7 @@ else
             <div class="row g-3">
                 <div class="col-md-4">
                     <label class="form-label">Agent</label>
-                    <select class="form-select" @bind="point.AgentConfigId">
+                    <select class="form-select" @bind="point.AgentConfigId" disabled="@(generateDialogOpen && generateAgent is not null)">
                         <option value="0">Select agent</option>
                         @foreach (var item in agents)
                         {
@@ -371,20 +341,30 @@ else
                     </select>
                 </div>
                 <div class="col-md-4">
+                    <label class="form-label">Mapping MIB Set</label>
+                    <select class="form-select" @bind="point.MibSetIdUsedForMapping">
+                        <option value="">Numeric OID only</option>
+                        @foreach (var item in mibSetOptions)
+                        {
+                            <option value="@item.Id">@item.Name (@item.Status)</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-4">
                     <label class="form-label">MIB label</label>
                     <input class="form-control" @bind="point.MibLabel" />
                 </div>
                 <div class="col-md-4">
-                    <div class="form-check form-switch mt-4">
-                        <input class="form-check-input" id="point-poll" type="checkbox" @bind="point.PollEnabled" />
-                        <label class="form-check-label" for="point-poll">Polling enabled</label>
-                    </div>
+                    <label class="form-label">MIB module</label>
+                    <input class="form-control" @bind="point.MibModule" />
                 </div>
                 <div class="col-md-4">
-                    <div class="form-check form-switch mt-4">
-                        <input class="form-check-input" id="point-set" type="checkbox" @bind="point.SetEnabled" />
-                        <label class="form-check-label" for="point-set">SNMP Set enabled</label>
-                    </div>
+                    <label class="form-label">MIB syntax</label>
+                    <input class="form-control" @bind="point.MibSyntax" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">MIB access</label>
+                    <input class="form-control" @bind="point.MibAccess" />
                 </div>
                 <div class="col-12">
                     <label class="form-label">Description</label>
@@ -395,6 +375,289 @@ else
         <div class="dialog-footer">
             <button class="btn btn-outline-secondary" type="button" @onclick="ClosePointDialog">Cancel</button>
             <button class="btn btn-primary" type="button" @onclick="SavePointAsync">Save</button>
+        </div>
+    </div>
+}
+
+@if (walkDialogOpen && walkAgent is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseWalkDialog"></div>
+    <div class="dialog-panel extra-wide" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">Walk @walkAgent.DisplayName</h2>
+                <div class="muted-metadata">@walkAgent.Host:@walkAgent.Port / @walkAgent.SnmpVersion / @(walkAgent.CredentialConfig?.Name ?? "No credential")</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseWalkDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="walk-controls">
+                <div>
+                    <label class="form-label">Root OID</label>
+                    <input class="form-control" @bind="walkRootOid" disabled="@walkRunning" />
+                </div>
+                <div>
+                    <label class="form-label">MIB Set</label>
+                    <select class="form-select" value="@MibSetSelectValue(walkSelectedMibSetId)" @onchange="OnWalkMibSetChanged" disabled="@walkRunning">
+                        <option value="">Numeric OID only</option>
+                        @foreach (var item in mibSetOptions)
+                        {
+                            <option value="@item.Id">@item.Name (@item.Status)</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">Operation timeout ms</label>
+                    <input class="form-control numeric" type="number" @bind="walkOperationTimeoutMs" disabled="@walkRunning" />
+                </div>
+                <div class="walk-control-actions">
+                    <button class="btn btn-primary" type="button" @onclick="RunWalkAsync" disabled="@walkRunning">@(walkRunning ? "Walking..." : "Walk")</button>
+                    <button class="btn btn-outline-secondary" type="button" @onclick="ExpandWalkTree" disabled="@(walkTree.Count == 0)">Expand all</button>
+                    <button class="btn btn-outline-secondary" type="button" @onclick="CollapseWalkTree" disabled="@(walkTree.Count == 0)">Collapse all</button>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(walkError))
+            {
+                <div class="alert alert-danger">@walkError</div>
+            }
+            else if (walkRunning)
+            {
+                <div class="empty-state">Running SNMP Walk...</div>
+            }
+            else if (walkResult?.Success == true)
+            {
+                <div class="walk-summary">
+                    <span class="status-badge success">@walkResult.Items.Count item(s)</span>
+                    <code>@NormalizeOidForDisplay(walkRootOid)</code>
+                </div>
+                @if (walkTree.Count == 0)
+                {
+                    <div class="empty-state">No objects were returned.</div>
+                }
+                else
+                {
+                    <div class="walk-tree" role="tree">
+                        @foreach (var row in VisibleWalkRows)
+                        {
+                            var node = row.Node;
+                            var hasChildren = node.Children.Count > 0;
+                            var isExpanded = expandedWalkNodes.Contains(node.Oid);
+                            <div class="walk-tree-row @(node.Item is null ? "branch" : "leaf")" style="@($"--walk-depth:{row.Depth}")" role="treeitem" aria-expanded="@(hasChildren ? isExpanded.ToString().ToLowerInvariant() : null)">
+                                <button class="walk-toggle" type="button" disabled="@(!hasChildren)" @onclick="() => ToggleWalkNode(node.Oid)">@(hasChildren ? (isExpanded ? "-" : "+") : "")</button>
+                                <div class="walk-node-main">
+                                    <div class="walk-node-title">
+                                        <span class="walk-segment">@node.Segment</span>
+                                        <code>@node.Oid</code>
+                                        @if (!string.IsNullOrWhiteSpace(node.Lookup?.SymbolicName))
+                                        {
+                                            <span class="walk-label">@node.Lookup.SymbolicName</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(node.Lookup?.ModuleName))
+                                        {
+                                            <span class="status-badge neutral">@node.Lookup.ModuleName</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(node.Lookup?.Syntax ?? node.Item?.Syntax))
+                                        {
+                                            <span class="status-badge neutral">@(node.Lookup?.Syntax ?? node.Item?.Syntax)</span>
+                                        }
+                                    </div>
+                                    @if (node.Item is not null)
+                                    {
+                                        <div class="walk-node-value">@node.Item.Value</div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(node.Lookup?.Description))
+                                    {
+                                        <div class="muted-metadata">@node.Lookup.Description</div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseWalkDialog">@(walkRunning ? "Cancel" : "Close")</button>
+        </div>
+    </div>
+}
+
+@if (generateDialogOpen && generateAgent is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseGenerateDialog"></div>
+    <div class="dialog-panel extra-wide" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">Edit Points for @generateAgent.DisplayName</h2>
+                <div class="muted-metadata">@generateAgent.Host:@generateAgent.Port / @generateAgent.SnmpVersion / @(generateAgent.CredentialConfig?.Name ?? "No credential")</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseGenerateDialog"></button>
+        </div>
+        <div class="dialog-body">
+            @if (!string.IsNullOrWhiteSpace(pointManagerMessage))
+            {
+                <div class="@(pointManagerMessageIsError ? "alert alert-danger" : "alert alert-info")">@pointManagerMessage</div>
+            }
+
+            <ul class="nav nav-tabs point-manager-tabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class='nav-link @(pointManagerTab == PointManagerPointsTab ? "active" : null)' type="button" role="tab" aria-selected="@(pointManagerTab == PointManagerPointsTab)" @onclick="ShowPointManagerPointsTab">Points (@ManagedAgentPoints.Count)</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class='nav-link @(pointManagerTab == PointManagerBuildTab ? "active" : null)' type="button" role="tab" aria-selected="@(pointManagerTab == PointManagerBuildTab)" @onclick="ShowPointManagerBuildTab">Build Points</button>
+                </li>
+            </ul>
+
+            @if (pointManagerTab == PointManagerPointsTab)
+            {
+                <div class="toolbar point-manager-toolbar">
+                    <div>
+                        <h3 class="section-title">Configured Points</h3>
+                        <div class="muted-metadata">Source paths are generated from agent ID and normalized numeric OID.</div>
+                    </div>
+                    <button class="btn btn-primary" type="button" @onclick="() => OpenPointDialog(null, generateAgent)">Add Point</button>
+                </div>
+
+                @if (ManagedAgentPoints.Count == 0)
+                {
+                    <div class="empty-state">No SNMP points are configured for this agent.</div>
+                }
+                else
+                {
+                    <div class="table-responsive point-manager-table">
+                        <table class="table table-sm data-table align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Point</th>
+                                    <th>OID</th>
+                                    <th>MIB</th>
+                                    <th>Value type</th>
+                                    <th>Access</th>
+                                    <th class="actions">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var item in ManagedAgentPoints)
+                            {
+                                <tr class='@(pointDialogOpen && point.Id == item.Id ? "selected-row" : null)'>
+                                    <td>
+                                        <div>@item.PointName</div>
+                                        <small>@item.SourcePath</small>
+                                    </td>
+                                    <td><code>@item.NumericOid</code></td>
+                                    <td>
+                                        <div>@(item.MibLabel ?? "-")</div>
+                                        <small>@MibSetName(item.MibSetIdUsedForMapping)</small>
+                                    </td>
+                                    <td>@item.ValueType</td>
+                                    <td><span class="status-badge neutral">@item.Access</span></td>
+                                    <td class="actions">
+                                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenPointDialog(item, generateAgent)">Edit</button>
+                                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenPointDeleteDialog(item)">Delete</button>
+                                    </td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="toolbar point-manager-toolbar">
+                    <div>
+                        <h3 class="section-title">Build Points</h3>
+                        <div class="muted-metadata">Scan this agent with SNMP Walk, review candidate objects, then apply selected rows as points.</div>
+                    </div>
+                </div>
+
+                <div class="walk-controls point-build-controls">
+                    <div>
+                        <label class="form-label">Root OID</label>
+                        <input class="form-control" @bind="generateRootOid" disabled="@generateRunning" />
+                    </div>
+                    <div>
+                        <label class="form-label">MIB Set</label>
+                        <select class="form-select" value="@MibSetSelectValue(generateSelectedMibSetId)" @onchange="OnGenerateMibSetChanged" disabled="@generateRunning">
+                            <option value="">Numeric OID only</option>
+                            @foreach (var item in mibSetOptions)
+                            {
+                                <option value="@item.Id">@item.Name (@item.Status)</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">Timeout ms</label>
+                        <input class="form-control numeric" type="number" @bind="generateOperationTimeoutMs" disabled="@generateRunning" />
+                    </div>
+                    <div class="walk-control-actions">
+                        <button class="btn btn-primary" type="button" @onclick="RunGenerateCandidatesAsync" disabled="@generateRunning">@(generateRunning ? "Walking..." : "Scan")</button>
+                    </div>
+                </div>
+                <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" id="generate-readable" type="checkbox" @bind="generateReadableOnly" disabled="@generateRunning" />
+                    <label class="form-check-label" for="generate-readable">Readable objects only</label>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(generateError))
+                {
+                    <div class="alert alert-danger">@generateError</div>
+                }
+                else if (generateRunning)
+                {
+                    <div class="empty-state">Running SNMP Walk...</div>
+                }
+                else if (pointCandidates.Count == 0)
+                {
+                    <div class="empty-state">No point candidates are available. Run Scan to build candidates from this agent.</div>
+                }
+                else
+                {
+                    <div class="table-responsive point-candidate-table">
+                        <table class="table table-sm data-table align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Select</th>
+                                    <th>OID</th>
+                                    <th>Label</th>
+                                    <th>Module</th>
+                                    <th>Syntax</th>
+                                    <th>Access</th>
+                                    <th>Current value</th>
+                                    <th>Point name</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var candidate in pointCandidates)
+                            {
+                                <tr>
+                                    <td>
+                                        <input class="form-check-input" type="checkbox" @bind="candidate.Selected" disabled="@candidate.Exists" />
+                                    </td>
+                                    <td><code>@candidate.NumericOid</code></td>
+                                    <td>@(candidate.Label ?? "-")</td>
+                                    <td>@(candidate.Module ?? "-")</td>
+                                    <td>@(candidate.Syntax ?? "-")</td>
+                                    <td><span class="status-badge neutral">@candidate.Access</span></td>
+                                    <td class="code-cell">@candidate.CurrentValue</td>
+                                    <td><input class="form-control form-control-sm" @bind="candidate.PointName" disabled="@candidate.Exists" /></td>
+                                    <td><span class="@StatusBadgeClass(candidate.Exists ? "disabled" : "normal")">@candidate.Status</span></td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseGenerateDialog">Close</button>
+            @if (pointManagerTab == PointManagerBuildTab)
+            {
+                <button class="btn btn-primary" type="button" @onclick="ApplyGeneratedPointsAsync" disabled="@(pointCandidates.All(c => !c.Selected || c.Exists))">Apply Selected</button>
+            }
         </div>
     </div>
 }
@@ -418,15 +681,20 @@ else
 }
 
 @code {
+    private const string PointManagerPointsTab = "points";
+    private const string PointManagerBuildTab = "build";
+
     private List<SnmpCredentialConfig> credentials = [];
     private List<SnmpAgentConfig> agents = [];
     private List<SnmpPointConfig> points = [];
+    private List<MibSetOption> mibSetOptions = [];
 
     private SnmpCredentialConfig credential = NewCredential();
     private SnmpAgentConfig agent = NewAgent();
     private SnmpPointConfig point = NewPoint();
 
-    private string? community;
+    private string? readCommunity;
+    private string? writeCommunity;
     private string? authPassword;
     private string? privPassword;
     private string? message;
@@ -434,17 +702,48 @@ else
     private bool credentialDialogOpen;
     private bool agentDialogOpen;
     private bool pointDialogOpen;
+    private bool walkDialogOpen;
+    private bool walkRunning;
+    private bool generateDialogOpen;
+    private bool generateRunning;
     private string? deleteKind;
     private int deleteId;
     private string deleteName = "";
+    private SnmpAgentConfig? walkAgent;
+    private string walkRootOid = "1.3.6.1.2.1";
+    private int walkOperationTimeoutMs = 60000;
+    private int? walkSelectedMibSetId;
+    private string? walkError;
+    private SnmpWalkResult? walkResult;
+    private List<WalkTreeNode> walkTree = [];
+    private HashSet<string> expandedWalkNodes = [];
+    private Dictionary<string, MibLookupResult> walkLookupByOid = new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? walkCancellation;
+    private SnmpAgentConfig? generateAgent;
+    private int? generateSelectedMibSetId;
+    private string generateRootOid = "1.3.6.1.2.1";
+    private int generateOperationTimeoutMs = 60000;
+    private bool generateReadableOnly = true;
+    private string? generateError;
+    private List<PointCandidate> pointCandidates = [];
+    private CancellationTokenSource? generateCancellation;
+    private string pointManagerTab = PointManagerPointsTab;
+    private string? pointManagerMessage;
+    private bool pointManagerMessageIsError;
 
     private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
+    private IReadOnlyList<WalkTreeRow> VisibleWalkRows => FlattenWalkTree(walkTree, expandedWalkNodes);
+    private IReadOnlyList<SnmpPointConfig> ManagedAgentPoints =>
+        generateAgent is null
+            ? Array.Empty<SnmpPointConfig>()
+            : points.Where(p => p.AgentConfigId == generateAgent.Id).ToList();
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task LoadAsync()
     {
         credentials = await Credentials.ListAsync();
+        mibSetOptions = await MibSets.ListOptionsAsync();
         agents = await Agents.ListAsync();
         points = await Points.ListAsync();
     }
@@ -452,7 +751,8 @@ else
     private void OpenCredentialDialog(SnmpCredentialConfig? item = null)
     {
         credential = item is null ? NewCredential() : CopyCredential(item);
-        community = null;
+        readCommunity = null;
+        writeCommunity = null;
         authPassword = null;
         privPassword = null;
         credentialDialogOpen = true;
@@ -468,19 +768,308 @@ else
 
     private void CloseAgentDialog() => agentDialogOpen = false;
 
-    private void OpenPointDialog(SnmpPointConfig? item = null)
+    private void OpenPointDialog(SnmpPointConfig? item = null, SnmpAgentConfig? ownerAgent = null)
     {
         point = item is null ? NewPoint() : CopyPoint(item);
+        if (ownerAgent is not null)
+        {
+            point.AgentConfigId = ownerAgent.Id;
+        }
+
         pointDialogOpen = true;
     }
 
     private void ClosePointDialog() => pointDialogOpen = false;
 
+    private void OpenWalkDialog(SnmpAgentConfig item)
+    {
+        walkAgent = item;
+        walkRootOid = "1.3.6.1.2.1";
+        walkOperationTimeoutMs = Math.Max(60000, item.TimeoutMs * 12);
+        walkSelectedMibSetId = item.PreferredMibSetId;
+        walkError = null;
+        walkResult = null;
+        walkTree = [];
+        expandedWalkNodes = [];
+        walkLookupByOid = new Dictionary<string, MibLookupResult>(StringComparer.OrdinalIgnoreCase);
+        walkDialogOpen = true;
+    }
+
+    private void CloseWalkDialog()
+    {
+        if (walkRunning)
+        {
+            walkCancellation?.Cancel();
+        }
+
+        walkDialogOpen = false;
+    }
+
+    private void OpenGenerateDialog(SnmpAgentConfig item)
+    {
+        generateAgent = item;
+        generateSelectedMibSetId = item.PreferredMibSetId;
+        generateRootOid = "1.3.6.1.2.1";
+        generateOperationTimeoutMs = Math.Max(60000, item.TimeoutMs * 12);
+        generateReadableOnly = true;
+        generateError = null;
+        pointCandidates = [];
+        pointManagerTab = PointManagerPointsTab;
+        pointManagerMessage = null;
+        pointManagerMessageIsError = false;
+        generateDialogOpen = true;
+    }
+
+    private void CloseGenerateDialog()
+    {
+        if (generateRunning)
+        {
+            generateCancellation?.Cancel();
+        }
+
+        generateDialogOpen = false;
+        pointDialogOpen = false;
+    }
+
+    private void ShowPointManagerPointsTab() => pointManagerTab = PointManagerPointsTab;
+
+    private void ShowPointManagerBuildTab() => pointManagerTab = PointManagerBuildTab;
+
+    private async Task RunWalkAsync()
+    {
+        if (walkAgent is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var rootOid = NormalizeWalkRootOid(walkRootOid);
+            var timeoutMs = NormalizeWalkOperationTimeoutMs(walkOperationTimeoutMs);
+            walkRootOid = rootOid;
+            walkOperationTimeoutMs = timeoutMs;
+            walkRunning = true;
+            walkError = null;
+            walkResult = null;
+            walkTree = [];
+            expandedWalkNodes = [];
+            walkLookupByOid = new Dictionary<string, MibLookupResult>(StringComparer.OrdinalIgnoreCase);
+
+            walkCancellation?.Dispose();
+            walkCancellation = new CancellationTokenSource();
+            var result = await SnmpClient.WalkAsync(walkAgent, walkAgent.CredentialConfig, rootOid, walkCancellation.Token, timeoutMs);
+            walkResult = result;
+
+            if (!result.Success)
+            {
+                walkError = result.ErrorMessage ?? "SNMP Walk failed.";
+                return;
+            }
+
+            walkLookupByOid = await BuildLookupMapAsync(walkSelectedMibSetId);
+            walkTree = BuildWalkTree(result.Items, walkLookupByOid);
+            expandedWalkNodes = BuildDefaultExpandedNodes(walkTree);
+        }
+        catch (OperationCanceledException)
+        {
+            walkError = "SNMP Walk canceled.";
+        }
+        catch (Exception ex)
+        {
+            walkError = ex.Message;
+        }
+        finally
+        {
+            walkRunning = false;
+            walkCancellation?.Dispose();
+            walkCancellation = null;
+        }
+    }
+
+    private async Task OnWalkMibSetChanged(ChangeEventArgs args)
+    {
+        walkSelectedMibSetId = ParseMibSetValue(args.Value);
+        if (walkResult?.Success != true)
+        {
+            return;
+        }
+
+        walkLookupByOid = await BuildLookupMapAsync(walkSelectedMibSetId);
+        walkTree = BuildWalkTree(walkResult.Items, walkLookupByOid);
+        expandedWalkNodes = BuildDefaultExpandedNodes(walkTree);
+    }
+
+    private void OnGenerateMibSetChanged(ChangeEventArgs args)
+    {
+        generateSelectedMibSetId = ParseMibSetValue(args.Value);
+        pointCandidates = [];
+        pointManagerMessage = null;
+    }
+
+    private void ToggleWalkNode(string oid)
+    {
+        if (!expandedWalkNodes.Remove(oid))
+        {
+            expandedWalkNodes.Add(oid);
+        }
+    }
+
+    private void ExpandWalkTree() => expandedWalkNodes = BuildAllExpandableNodes(walkTree);
+
+    private void CollapseWalkTree() => expandedWalkNodes = [];
+
+    private async Task RunGenerateCandidatesAsync()
+    {
+        if (generateAgent is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var rootOid = NormalizeWalkRootOid(generateRootOid);
+            var timeoutMs = NormalizeWalkOperationTimeoutMs(generateOperationTimeoutMs);
+            generateRootOid = rootOid;
+            generateOperationTimeoutMs = timeoutMs;
+            generateError = null;
+            pointManagerMessage = null;
+            pointCandidates = [];
+            generateRunning = true;
+
+            generateCancellation?.Dispose();
+            generateCancellation = new CancellationTokenSource();
+            var result = await SnmpClient.WalkAsync(generateAgent, generateAgent.CredentialConfig, rootOid, generateCancellation.Token, timeoutMs);
+            if (!result.Success)
+            {
+                generateError = result.ErrorMessage ?? "SNMP Walk failed.";
+                return;
+            }
+
+            var lookupByOid = await BuildLookupMapAsync(generateSelectedMibSetId);
+            pointCandidates = BuildPointCandidates(generateAgent, result.Items, lookupByOid);
+        }
+        catch (OperationCanceledException)
+        {
+            generateError = "SNMP Walk canceled.";
+        }
+        catch (Exception ex)
+        {
+            generateError = ex.Message;
+        }
+        finally
+        {
+            generateRunning = false;
+            generateCancellation?.Dispose();
+            generateCancellation = null;
+        }
+    }
+
+    private async Task ApplyGeneratedPointsAsync()
+    {
+        if (generateAgent is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var created = 0;
+            foreach (var candidate in pointCandidates.Where(c => c.Selected && !c.Exists))
+            {
+                await Points.CreateOrUpdateAsync(new SnmpPointConfig
+                {
+                    AgentConfigId = generateAgent.Id,
+                    PointName = candidate.PointName,
+                    NumericOid = candidate.NumericOid,
+                    ValueType = candidate.ValueType,
+                    Access = candidate.Access,
+                    Description = candidate.Description,
+                    MibSetIdUsedForMapping = generateSelectedMibSetId,
+                    MibLabel = candidate.Label,
+                    MibModule = candidate.Module,
+                    MibSyntax = candidate.Syntax,
+                    MibAccess = candidate.MibAccess,
+                    MibDescription = candidate.Description
+                });
+                candidate.Exists = true;
+                candidate.Selected = false;
+                candidate.Status = "created";
+                created++;
+            }
+
+            await LoadAsync();
+            SetPointManagerMessage($"Created {created} point(s).");
+        }
+        catch (Exception ex)
+        {
+            SetPointManagerMessage(ex.Message, isError: true);
+        }
+    }
+
+    private async Task<Dictionary<string, MibLookupResult>> BuildLookupMapAsync(int? mibSetId)
+    {
+        if (mibSetId is null)
+        {
+            return new Dictionary<string, MibLookupResult>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var nodes = await MibLookup.ListBySetAsync(mibSetId.Value);
+        return nodes
+            .GroupBy(n => n.NumericOid, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private List<PointCandidate> BuildPointCandidates(
+        SnmpAgentConfig sourceAgent,
+        IReadOnlyList<SnmpWalkItem> items,
+        IReadOnlyDictionary<string, MibLookupResult> lookupByOid)
+    {
+        var existingSourcePaths = points.Select(p => p.SourcePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var usedNames = points
+            .Where(p => p.AgentConfigId == sourceAgent.Id)
+            .Select(p => p.PointName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<PointCandidate>();
+
+        foreach (var item in items.OrderBy(i => i.Oid, OidPathComparer.Instance))
+        {
+            var numericOid = NormalizeOidForDisplay(item.Oid);
+            var lookup = FindLookupForOid(lookupByOid, numericOid);
+            var access = NormalizeAccess(lookup?.Access);
+            if (generateReadableOnly && access == SnmpAccessModes.WriteOnly)
+            {
+                continue;
+            }
+
+            var sourcePath = Paths.BuildPointSourcePath(sourceAgent.AgentId, numericOid);
+            var exists = existingSourcePaths.Contains(sourcePath);
+            var suggestedName = MakeUniquePointName(MakePointName(lookup?.SymbolicName, numericOid), usedNames);
+            candidates.Add(new PointCandidate
+            {
+                Selected = !exists,
+                Exists = exists,
+                NumericOid = numericOid,
+                Label = lookup?.SymbolicName,
+                Module = lookup?.ModuleName,
+                Syntax = lookup?.Syntax ?? item.Syntax,
+                MibAccess = lookup?.Access,
+                Access = access,
+                CurrentValue = item.Value ?? "",
+                PointName = suggestedName,
+                ValueType = InferValueType(lookup?.Syntax ?? item.Syntax),
+                Description = lookup?.Description,
+                Status = exists ? "existing" : "new"
+            });
+        }
+
+        return candidates;
+    }
+
     private async Task SaveCredentialAsync()
     {
         try
         {
-            await Credentials.CreateOrUpdateAsync(credential, new SnmpCredentialSecrets(community, authPassword, privPassword));
+            await Credentials.CreateOrUpdateAsync(credential, new SnmpCredentialSecrets(readCommunity, writeCommunity, authPassword, privPassword));
             credentialDialogOpen = false;
             SetMessage("Credential saved.");
             await LoadAsync();
@@ -512,12 +1101,26 @@ else
         {
             await Points.CreateOrUpdateAsync(point);
             pointDialogOpen = false;
-            SetMessage("Point saved.");
             await LoadAsync();
+            if (generateDialogOpen && generateAgent is not null)
+            {
+                SetPointManagerMessage("Point saved.");
+            }
+            else
+            {
+                SetMessage("Point saved.");
+            }
         }
         catch (Exception ex)
         {
-            SetMessage(ex.Message, isError: true);
+            if (generateDialogOpen && generateAgent is not null)
+            {
+                SetPointManagerMessage(ex.Message, isError: true);
+            }
+            else
+            {
+                SetMessage(ex.Message, isError: true);
+            }
         }
     }
 
@@ -548,6 +1151,8 @@ else
     {
         try
         {
+            var deleted = deleteKind;
+            var showPointManagerMessage = deleted == "point" && generateDialogOpen && generateAgent is not null;
             switch (deleteKind)
             {
                 case "credential":
@@ -561,14 +1166,27 @@ else
                     break;
             }
 
-            var deleted = deleteKind;
             CloseDeleteDialog();
-            SetMessage($"{deleted} deleted.");
             await LoadAsync();
+            if (showPointManagerMessage)
+            {
+                SetPointManagerMessage("Point deleted.");
+            }
+            else
+            {
+                SetMessage($"{deleted} deleted.");
+            }
         }
         catch (Exception ex)
         {
-            SetMessage(ex.Message, isError: true);
+            if (deleteKind == "point" && generateDialogOpen && generateAgent is not null)
+            {
+                SetPointManagerMessage(ex.Message, isError: true);
+            }
+            else
+            {
+                SetMessage(ex.Message, isError: true);
+            }
         }
     }
 
@@ -578,6 +1196,12 @@ else
         messageIsError = isError;
     }
 
+    private void SetPointManagerMessage(string value, bool isError = false)
+    {
+        pointManagerMessage = value;
+        pointManagerMessageIsError = isError;
+    }
+
     private static SnmpCredentialConfig NewCredential() =>
         new() { Version = SnmpVersions.V2C, SecurityLevel = SnmpSecurityLevels.NoAuthNoPriv };
 
@@ -585,7 +1209,7 @@ else
         new() { Port = 161, SnmpVersion = SnmpVersions.V2C, TimeoutMs = 5000, RetryCount = 1, PollingRateMs = 1000, Enabled = true };
 
     private static SnmpPointConfig NewPoint() =>
-        new() { ValueType = SnmpValueTypes.String, Access = SnmpAccessModes.ReadOnly, PollEnabled = true };
+        new() { ValueType = SnmpValueTypes.String, Access = SnmpAccessModes.ReadOnly };
 
     private static SnmpCredentialConfig CopyCredential(SnmpCredentialConfig source) =>
         new()
@@ -610,6 +1234,7 @@ else
             Port = source.Port,
             SnmpVersion = source.SnmpVersion,
             CredentialConfigId = source.CredentialConfigId,
+            PreferredMibSetId = source.PreferredMibSetId,
             TimeoutMs = source.TimeoutMs,
             RetryCount = source.RetryCount,
             PollingRateMs = source.PollingRateMs,
@@ -626,23 +1251,104 @@ else
             SourcePath = source.SourcePath,
             NumericOid = source.NumericOid,
             ValueType = source.ValueType,
-            PollEnabled = source.PollEnabled,
-            SetEnabled = source.SetEnabled,
             Access = source.Access,
             Description = source.Description,
-            MibLabel = source.MibLabel
+            MibSetIdUsedForMapping = source.MibSetIdUsedForMapping,
+            MibLabel = source.MibLabel,
+            MibModule = source.MibModule,
+            MibSyntax = source.MibSyntax,
+            MibAccess = source.MibAccess,
+            MibDescription = source.MibDescription
         };
 
     private static string SecuritySummary(SnmpCredentialConfig item)
     {
         if (item.Version != SnmpVersions.V3)
         {
-            return "community";
+            return "read/write community";
         }
 
         return string.IsNullOrWhiteSpace(item.SecurityLevel)
             ? SnmpSecurityLevels.NoAuthNoPriv
             : item.SecurityLevel;
+    }
+
+    private string MibSetName(int? mibSetId)
+    {
+        if (mibSetId is null)
+        {
+            return "Numeric OID only";
+        }
+
+        return mibSetOptions.FirstOrDefault(s => s.Id == mibSetId)?.Name ?? $"MIB set {mibSetId}";
+    }
+
+    private static string MibSetSelectValue(int? mibSetId) =>
+        mibSetId?.ToString() ?? "";
+
+    private static int? ParseMibSetValue(object? value) =>
+        int.TryParse(Convert.ToString(value), out var parsed) && parsed > 0 ? parsed : null;
+
+    private static string NormalizeAccess(string? mibAccess)
+    {
+        var normalized = (mibAccess ?? "").Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "read-write" or "readwrite" or "rw" => SnmpAccessModes.ReadWrite,
+            "write-only" or "writeonly" or "wo" => SnmpAccessModes.WriteOnly,
+            _ => SnmpAccessModes.ReadOnly
+        };
+    }
+
+    private static string InferValueType(string? syntax)
+    {
+        var normalized = (syntax ?? "").Trim().ToLowerInvariant();
+        if (normalized.Contains("integer", StringComparison.Ordinal) || normalized.Contains("counter", StringComparison.Ordinal))
+        {
+            return SnmpValueTypes.Integer;
+        }
+        if (normalized.Contains("gauge", StringComparison.Ordinal) || normalized.Contains("float", StringComparison.Ordinal) || normalized.Contains("double", StringComparison.Ordinal))
+        {
+            return SnmpValueTypes.Double;
+        }
+        if (normalized.Contains("timetick", StringComparison.Ordinal))
+        {
+            return SnmpValueTypes.Timeticks;
+        }
+        if (normalized.Contains("object identifier", StringComparison.Ordinal) || normalized == "oid")
+        {
+            return SnmpValueTypes.Oid;
+        }
+
+        return SnmpValueTypes.String;
+    }
+
+    private static string MakePointName(string? label, string numericOid)
+    {
+        var source = string.IsNullOrWhiteSpace(label)
+            ? "oid_" + numericOid.Replace(".", "_", StringComparison.Ordinal)
+            : label;
+        var builder = new System.Text.StringBuilder();
+        foreach (var ch in source)
+        {
+            builder.Append(char.IsLetterOrDigit(ch) || ch is '_' or '-' ? ch : '_');
+        }
+
+        var value = builder.ToString().Trim('_');
+        return string.IsNullOrWhiteSpace(value) ? "snmp_point" : value;
+    }
+
+    private static string MakeUniquePointName(string baseName, HashSet<string> usedNames)
+    {
+        var candidate = baseName;
+        var suffix = 2;
+        while (!usedNames.Add(candidate))
+        {
+            candidate = $"{baseName}_{suffix}";
+            suffix++;
+        }
+
+        return candidate;
     }
 
     private static string StatusBadgeClass(string? status)
@@ -659,4 +1365,240 @@ else
 
     private static string FormatDate(DateTime value) =>
         value == default ? "-" : value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
+    private static string NormalizeWalkRootOid(string value)
+    {
+        var oid = NormalizeOidForDisplay(value);
+        if (string.IsNullOrWhiteSpace(oid) || oid.Any(ch => !char.IsDigit(ch) && ch != '.') || !oid.Any(char.IsDigit))
+        {
+            throw new InvalidOperationException("Root OID must be numeric.");
+        }
+
+        return oid;
+    }
+
+    private static string NormalizeOidForDisplay(string value) => value.Trim().TrimStart('.');
+
+    private static int NormalizeWalkOperationTimeoutMs(int value)
+    {
+        if (value < 1000)
+        {
+            throw new InvalidOperationException("Operation timeout must be at least 1000 ms.");
+        }
+
+        return value;
+    }
+
+    private static List<WalkTreeNode> BuildWalkTree(
+        IEnumerable<SnmpWalkItem> items,
+        IReadOnlyDictionary<string, MibLookupResult> lookupByOid)
+    {
+        var roots = new List<WalkTreeNode>();
+        var byOid = new Dictionary<string, WalkTreeNode>(StringComparer.Ordinal);
+
+        foreach (var item in items.OrderBy(i => i.Oid, OidPathComparer.Instance))
+        {
+            var parentChildren = roots;
+            var prefix = "";
+            foreach (var segment in item.Oid.Trim().TrimStart('.').Split('.', StringSplitOptions.RemoveEmptyEntries))
+            {
+                prefix = string.IsNullOrEmpty(prefix) ? segment : $"{prefix}.{segment}";
+                if (!byOid.TryGetValue(prefix, out var node))
+                {
+                    node = new WalkTreeNode(segment, prefix);
+                    byOid[prefix] = node;
+                    parentChildren.Add(node);
+                }
+
+                node.Lookup ??= FindLookupForOid(lookupByOid, prefix);
+                parentChildren = node.Children;
+            }
+
+            if (byOid.TryGetValue(item.Oid.Trim().TrimStart('.'), out var leaf))
+            {
+                leaf.Item = item;
+                leaf.Lookup = FindLookupForOid(lookupByOid, leaf.Oid);
+            }
+        }
+
+        SortWalkTree(roots);
+        return roots;
+    }
+
+    private static MibLookupResult? FindLookupForOid(
+        IReadOnlyDictionary<string, MibLookupResult> lookupByOid,
+        string numericOid)
+    {
+        var probe = NormalizeOidForDisplay(numericOid);
+        while (!string.IsNullOrWhiteSpace(probe))
+        {
+            if (lookupByOid.TryGetValue(probe, out var lookup))
+            {
+                return lookup;
+            }
+
+            var lastDot = probe.LastIndexOf('.');
+            if (lastDot < 0)
+            {
+                return null;
+            }
+
+            probe = probe[..lastDot];
+        }
+
+        return null;
+    }
+
+    private static void SortWalkTree(List<WalkTreeNode> nodes)
+    {
+        nodes.Sort((left, right) => OidPathComparer.Instance.Compare(left.Oid, right.Oid));
+        foreach (var node in nodes)
+        {
+            SortWalkTree(node.Children);
+        }
+    }
+
+    private static IReadOnlyList<WalkTreeRow> FlattenWalkTree(IReadOnlyList<WalkTreeNode> roots, HashSet<string> expanded)
+    {
+        var rows = new List<WalkTreeRow>();
+        foreach (var root in roots)
+        {
+            AddVisibleNode(root, 0);
+        }
+
+        return rows;
+
+        void AddVisibleNode(WalkTreeNode node, int depth)
+        {
+            rows.Add(new WalkTreeRow(node, depth));
+            if (!expanded.Contains(node.Oid))
+            {
+                return;
+            }
+
+            foreach (var child in node.Children)
+            {
+                AddVisibleNode(child, depth + 1);
+            }
+        }
+    }
+
+    private static HashSet<string> BuildDefaultExpandedNodes(IReadOnlyList<WalkTreeNode> roots)
+    {
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in roots)
+        {
+            AddDefault(root, 0);
+        }
+
+        return expanded;
+
+        void AddDefault(WalkTreeNode node, int depth)
+        {
+            if (node.Children.Count == 0)
+            {
+                return;
+            }
+
+            if (depth < 4 || (node.Item is null && node.Children.Count == 1))
+            {
+                expanded.Add(node.Oid);
+                foreach (var child in node.Children)
+                {
+                    AddDefault(child, depth + 1);
+                }
+            }
+        }
+    }
+
+    private static HashSet<string> BuildAllExpandableNodes(IReadOnlyList<WalkTreeNode> roots)
+    {
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in roots)
+        {
+            AddNode(root);
+        }
+
+        return expanded;
+
+        void AddNode(WalkTreeNode node)
+        {
+            if (node.Children.Count > 0)
+            {
+                expanded.Add(node.Oid);
+            }
+
+            foreach (var child in node.Children)
+            {
+                AddNode(child);
+            }
+        }
+    }
+
+    private sealed class WalkTreeNode(string segment, string oid)
+    {
+        public string Segment { get; } = segment;
+        public string Oid { get; } = oid;
+        public SnmpWalkItem? Item { get; set; }
+        public MibLookupResult? Lookup { get; set; }
+        public List<WalkTreeNode> Children { get; } = [];
+    }
+
+    private sealed record WalkTreeRow(WalkTreeNode Node, int Depth);
+
+    private sealed class PointCandidate
+    {
+        public bool Selected { get; set; }
+        public bool Exists { get; set; }
+        public string NumericOid { get; set; } = "";
+        public string? Label { get; set; }
+        public string? Module { get; set; }
+        public string? Syntax { get; set; }
+        public string Access { get; set; } = SnmpAccessModes.ReadOnly;
+        public string? MibAccess { get; set; }
+        public string CurrentValue { get; set; } = "";
+        public string PointName { get; set; } = "";
+        public string ValueType { get; set; } = SnmpValueTypes.String;
+        public string? Description { get; set; }
+        public string Status { get; set; } = "new";
+    }
+
+    private sealed class OidPathComparer : IComparer<string>
+    {
+        public static readonly OidPathComparer Instance = new();
+
+        public int Compare(string? left, string? right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return 0;
+            }
+            if (left is null)
+            {
+                return -1;
+            }
+            if (right is null)
+            {
+                return 1;
+            }
+
+            var leftParts = left.Trim().TrimStart('.').Split('.', StringSplitOptions.RemoveEmptyEntries);
+            var rightParts = right.Trim().TrimStart('.').Split('.', StringSplitOptions.RemoveEmptyEntries);
+            var count = Math.Min(leftParts.Length, rightParts.Length);
+            for (var i = 0; i < count; i++)
+            {
+                var leftNumber = int.TryParse(leftParts[i], out var parsedLeft);
+                var rightNumber = int.TryParse(rightParts[i], out var parsedRight);
+                var comparison = leftNumber && rightNumber
+                    ? parsedLeft.CompareTo(parsedRight)
+                    : string.Compare(leftParts[i], rightParts[i], StringComparison.Ordinal);
+                if (comparison != 0)
+                {
+                    return comparison;
+                }
+            }
+
+            return leftParts.Length.CompareTo(rightParts.Length);
+        }
+    }
 }

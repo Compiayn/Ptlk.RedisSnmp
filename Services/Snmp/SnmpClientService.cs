@@ -23,7 +23,7 @@ public sealed class SnmpClientService(
     {
         var process = await runner.RunAsync(
             arguments.BuildGet(agent, credential, numericOid),
-            TimeSpan.FromMilliseconds(agent.TimeoutMs > 0 ? agent.TimeoutMs : runtimeOptions.Value.DefaultTimeoutMs),
+            TimeSpan.FromMilliseconds(RequestTimeoutMs(agent)),
             cancellationToken);
         var result = ParseGetOrSet(numericOid, process);
         await log.AddSnmpAsync(
@@ -43,11 +43,12 @@ public sealed class SnmpClientService(
         SnmpAgentConfig agent,
         SnmpCredentialConfig? credential,
         string rootOid,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? operationTimeoutMs = null)
     {
         var process = await runner.RunAsync(
             arguments.BuildWalk(agent, credential, rootOid),
-            TimeSpan.FromMilliseconds(agent.TimeoutMs > 0 ? agent.TimeoutMs : runtimeOptions.Value.DefaultTimeoutMs),
+            TimeSpan.FromMilliseconds(WalkOperationTimeoutMs(agent, operationTimeoutMs)),
             cancellationToken);
         var result = ParseWalk(process);
         await log.AddSnmpAsync(
@@ -73,7 +74,7 @@ public sealed class SnmpClientService(
     {
         var process = await runner.RunAsync(
             arguments.BuildSet(agent, credential, point.NumericOid, point.ValueType, value),
-            TimeSpan.FromMilliseconds(agent.TimeoutMs > 0 ? agent.TimeoutMs : runtimeOptions.Value.DefaultTimeoutMs),
+            TimeSpan.FromMilliseconds(RequestTimeoutMs(agent)),
             cancellationToken);
         var parsed = ParseGetOrSet(point.NumericOid, process);
         var result = new SnmpSetResult(parsed.Success, parsed.Oid, parsed.Value, parsed.Syntax, parsed.RawOutput, parsed.ErrorCode, parsed.ErrorMessage);
@@ -94,8 +95,17 @@ public sealed class SnmpClientService(
         string input,
         CancellationToken cancellationToken = default)
     {
+        return await TranslateAsync(input, null, false, cancellationToken);
+    }
+
+    public async Task<SnmpTranslateResult> TranslateAsync(
+        string input,
+        IReadOnlyList<string>? mibDirectories,
+        bool loadAllMibs,
+        CancellationToken cancellationToken = default)
+    {
         var process = await runner.RunAsync(
-            arguments.BuildTranslate(input),
+            arguments.BuildTranslate(input, mibDirectories: mibDirectories, loadAllMibs: loadAllMibs),
             TimeSpan.FromMilliseconds(runtimeOptions.Value.DefaultTimeoutMs),
             cancellationToken);
 
@@ -230,6 +240,19 @@ public sealed class SnmpClientService(
         return oid.All(ch => char.IsDigit(ch) || ch == '.') && oid.Any(char.IsDigit)
             ? oid
             : value.Trim();
+    }
+
+    private int RequestTimeoutMs(SnmpAgentConfig agent) =>
+        agent.TimeoutMs > 0 ? agent.TimeoutMs : runtimeOptions.Value.DefaultTimeoutMs;
+
+    private int WalkOperationTimeoutMs(SnmpAgentConfig agent, int? requestedTimeoutMs)
+    {
+        var requestTimeoutMs = RequestTimeoutMs(agent);
+        var configuredTimeoutMs = runtimeOptions.Value.DefaultWalkTimeoutMs > 0
+            ? runtimeOptions.Value.DefaultWalkTimeoutMs
+            : Math.Max(60000, requestTimeoutMs * 12);
+        var operationTimeoutMs = requestedTimeoutMs.GetValueOrDefault(configuredTimeoutMs);
+        return Math.Max(operationTimeoutMs, requestTimeoutMs);
     }
 }
 

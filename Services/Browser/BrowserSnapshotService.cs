@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Ptlk.RedisSnmp.Contracts.Redis;
 using Ptlk.RedisSnmp.Data;
+using Ptlk.RedisSnmp.Models;
 using Ptlk.RedisSnmp.Services.Redis;
 using Ptlk.RedisSnmp.Services.Snmp;
 
@@ -11,6 +12,7 @@ public sealed record BrowserPointSnapshot(
     string PointName,
     string SourcePath,
     string NumericOid,
+    string Access,
     string? LocalValue,
     string LocalQuality,
     DateTimeOffset? LocalTimestamp,
@@ -36,40 +38,56 @@ public sealed class BrowserSnapshotService(
             .ToListAsync(cancellationToken);
         var mappings = await db.RedisMappings.AsNoTracking().ToDictionaryAsync(m => m.SourcePath, m => m, StringComparer.OrdinalIgnoreCase, cancellationToken);
         var claims = ownership.Snapshot().ToDictionary(c => c.SourcePath, c => c, StringComparer.OrdinalIgnoreCase);
-        var rows = new List<BrowserPointSnapshot>();
 
-        foreach (var point in points)
+        var rowTasks = points.Select(point => BuildRowAsync(point, mappings, claims, cancellationToken));
+        return await Task.WhenAll(rowTasks);
+    }
+
+    private async Task<BrowserPointSnapshot> BuildRowAsync(
+        SnmpPointConfig point,
+        IReadOnlyDictionary<string, RedisMapping> mappings,
+        IReadOnlyDictionary<string, PointOwnershipClaimResult> claims,
+        CancellationToken cancellationToken)
+    {
+        mappings.TryGetValue(point.SourcePath, out var mapping);
+        claims.TryGetValue(point.SourcePath, out var claim);
+        var local = cache.Get(point.SourcePath);
+        var redis = await ReadRedisStateAsync(mapping?.RedisKey, cancellationToken);
+
+        return new BrowserPointSnapshot(
+            point.AgentConfig?.AgentId ?? "-",
+            point.PointName,
+            point.SourcePath,
+            point.NumericOid,
+            point.Access,
+            local?.Value,
+            local?.Quality ?? "unset",
+            local?.Timestamp,
+            local?.LastErrorMessage,
+            mapping?.RedisKey,
+            claim?.Acquired ?? !RedisPointOwnershipService.RequiresOwnership(point.SourcePath),
+            claim?.Status,
+            redis);
+    }
+
+    private async Task<PointStateContract?> ReadRedisStateAsync(string? redisKey, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(redisKey))
         {
-            mappings.TryGetValue(point.SourcePath, out var mapping);
-            claims.TryGetValue(point.SourcePath, out var claim);
-            var local = cache.Get(point.SourcePath);
-            PointStateContract? redis = null;
-            if (mapping is not null)
-            {
-                try
-                {
-                    redis = await redisState.ReadAsync(mapping.RedisKey, cancellationToken);
-                }
-                catch
-                {
-                }
-            }
-
-            rows.Add(new BrowserPointSnapshot(
-                point.AgentConfig?.AgentId ?? "-",
-                point.PointName,
-                point.SourcePath,
-                point.NumericOid,
-                local?.Value,
-                local?.Quality ?? "unset",
-                local?.Timestamp,
-                local?.LastErrorMessage,
-                mapping?.RedisKey,
-                claim?.Acquired ?? !RedisPointOwnershipService.RequiresOwnership(point.SourcePath),
-                claim?.Status,
-                redis));
+            return null;
         }
 
-        return rows;
+        try
+        {
+            return await redisState.ReadAsync(redisKey, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

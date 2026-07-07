@@ -3,6 +3,8 @@ namespace Ptlk.RedisSnmp.Models;
 public sealed class MibImportJob
 {
     public int Id { get; set; }
+    public int? MibSetId { get; set; }
+    public MibSet? MibSet { get; set; }
     public string ImportId { get; set; } = Guid.NewGuid().ToString("N");
     public string VersionName { get; set; } = "";
     public string Status { get; set; } = "staging";

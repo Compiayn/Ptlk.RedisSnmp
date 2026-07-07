@@ -6,6 +6,8 @@ public sealed class SnmpCredentialConfig
     public string Name { get; set; } = "";
     public string Version { get; set; } = "v2c";
     public string? ProtectedCommunity { get; set; }
+    public string? ProtectedReadCommunity { get; set; }
+    public string? ProtectedWriteCommunity { get; set; }
     public string? SecurityName { get; set; }
     public string? SecurityLevel { get; set; }
     public string? AuthProtocol { get; set; }

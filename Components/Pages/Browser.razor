@@ -1,5 +1,7 @@
 @page "/browser"
 @rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject Microsoft.Extensions.Options.IOptions<Ptlk.RedisSnmp.Configuration.BrowserOptions> BrowserSettings
 @inject BrowserSnapshotService SnapshotService
 @inject CommandDispatcherService Dispatcher
 @inject CommandExecutionService Commands
@@ -7,9 +9,9 @@
 <div class="page-header">
     <div>
         <h1>Browser</h1>
-        <p class="page-kicker">Manual snapshot of local SNMP cache, Redis point state, and ownership.</p>
+        <p class="page-kicker">Runtime snapshot of local SNMP cache, Redis point state, and ownership.</p>
     </div>
-    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+    <button class="btn btn-outline-primary" type="button" @onclick="RequestRefreshAsync" disabled="@isLoading">@(isLoading ? "Refreshing" : "Refresh")</button>
 </div>
 
 @if (!string.IsNullOrWhiteSpace(message))
@@ -22,7 +24,7 @@
     <div class="muted-metadata mb-3">Snapshot refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
 }
 
-@if (isLoading)
+@if (isLoading && !hasLoaded)
 {
     <div class="empty-state">Loading browser snapshot...</div>
 }
@@ -49,6 +51,7 @@ else
             <tbody>
             @foreach (var row in rows)
             {
+                var canWrite = SnmpAccessModes.CanWrite(row.Access);
                 <tr>
                     <td>@row.AgentId</td>
                     <td>
@@ -89,11 +92,11 @@ else
                     <td><span class="@StatusBadgeClass(row.Owned ? "owned" : row.OwnershipStatus)">@OwnershipText(row)</span></td>
                     <td class="actions">
                         <div class="input-group input-group-sm">
-                            <input class="form-control" placeholder="value" @bind="writeValues[row.SourcePath]" />
-                            <button class="btn btn-outline-secondary" type="button" @onclick="() => WriteSnmpAsync(row.SourcePath)">SNMP</button>
+                            <input class="form-control" placeholder="value" @bind="writeValues[row.SourcePath]" disabled="@(!canWrite)" />
+                            <button class="btn btn-outline-secondary" type="button" disabled="@(!canWrite)" @onclick="() => WriteSnmpAsync(row.SourcePath)">SNMP</button>
                             @if (row.RedisKey is not null)
                             {
-                                <button class="btn btn-outline-primary" type="button" disabled="@(!row.Owned)" @onclick="() => WriteRedisAsync(row)">Redis</button>
+                                <button class="btn btn-outline-primary" type="button" disabled="@(!row.Owned || !canWrite)" @onclick="() => WriteRedisAsync(row)">Redis</button>
                             }
                         </div>
                     </td>
@@ -107,26 +110,118 @@ else
 @code {
     private IReadOnlyList<BrowserPointSnapshot> rows = [];
     private Dictionary<string, string> writeValues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim refreshGate = new(1, 1);
+    private readonly object debounceLock = new();
+    private CancellationTokenSource? pageCancellation;
+    private CancellationTokenSource? debounceCancellation;
+    private Task? refreshLoopTask;
     private string? message;
     private bool messageIsError;
     private bool isLoading;
+    private bool hasLoaded;
+    private bool disposed;
     private DateTimeOffset? lastLoaded;
 
     private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
+    private TimeSpan RefreshInterval => TimeSpan.FromMilliseconds(BrowserSettings.Value.RefreshIntervalMs > 0
+        ? BrowserSettings.Value.RefreshIntervalMs
+        : 1000);
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        pageCancellation = new CancellationTokenSource();
+        await RefreshSnapshotAsync(pageCancellation.Token);
+        refreshLoopTask = RunRefreshLoopAsync(pageCancellation.Token);
+    }
 
-    private async Task LoadAsync()
+    private async Task RequestRefreshAsync()
+    {
+        QueueDebouncedRefresh();
+        await Task.CompletedTask;
+    }
+
+    private void QueueDebouncedRefresh()
+    {
+        if (disposed || pageCancellation is null)
+        {
+            return;
+        }
+
+        CancellationTokenSource current;
+        CancellationTokenSource? previous;
+        lock (debounceLock)
+        {
+            previous = debounceCancellation;
+            current = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
+            debounceCancellation = current;
+        }
+
+        previous?.Cancel();
+        _ = RunDebouncedRefreshAsync(current);
+    }
+
+    private async Task RunDebouncedRefreshAsync(CancellationTokenSource refreshCancellation)
     {
         try
         {
+            await Task.Delay(RefreshInterval, refreshCancellation.Token);
+            await RefreshSnapshotAsync(refreshCancellation.Token);
+        }
+        catch (OperationCanceledException) when (refreshCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            lock (debounceLock)
+            {
+                if (ReferenceEquals(debounceCancellation, refreshCancellation))
+                {
+                    debounceCancellation = null;
+                }
+            }
+
+            refreshCancellation.Dispose();
+        }
+    }
+
+    private async Task RunRefreshLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(RefreshInterval);
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await RefreshSnapshotAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task RefreshSnapshotAsync(CancellationToken cancellationToken)
+    {
+        if (!await refreshGate.WaitAsync(0, cancellationToken))
+        {
+            return;
+        }
+
+        try
+        {
             isLoading = true;
-            rows = await SnapshotService.SnapshotAsync();
+            await InvokeAsync(StateHasChanged);
+            var snapshot = await SnapshotService.SnapshotAsync(cancellationToken);
+            rows = snapshot;
             lastLoaded = DateTimeOffset.Now;
             foreach (var row in rows)
             {
                 writeValues.TryAdd(row.SourcePath, "");
             }
+
+            hasLoaded = true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -135,6 +230,8 @@ else
         finally
         {
             isLoading = false;
+            refreshGate.Release();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -142,9 +239,9 @@ else
     {
         try
         {
-            var result = await Commands.DirectSnmpWriteAsync(sourcePath, writeValues.GetValueOrDefault(sourcePath) ?? "", "browser");
+            var result = await Commands.DirectSnmpWriteAsync(sourcePath, writeValues.GetValueOrDefault(sourcePath) ?? "", "browser", pageCancellation?.Token ?? CancellationToken.None);
             SetMessage($"{result.Status}: {result.Message}", result.Status.Equals("failed", StringComparison.OrdinalIgnoreCase));
-            await LoadAsync();
+            QueueDebouncedRefresh();
         }
         catch (Exception ex)
         {
@@ -162,9 +259,9 @@ else
         try
         {
             var mapping = new Ptlk.RedisSnmp.Models.RedisMapping { SourcePath = row.SourcePath, RedisKey = row.RedisKey };
-            var result = await Dispatcher.DispatchHmiWriteAsync(mapping, writeValues.GetValueOrDefault(row.SourcePath) ?? "", "browser");
+            var result = await Dispatcher.DispatchHmiWriteAsync(mapping, writeValues.GetValueOrDefault(row.SourcePath) ?? "", "browser", pageCancellation?.Token ?? CancellationToken.None);
             SetMessage($"{result.Status}: {result.Message}", result.Status.Equals("failed", StringComparison.OrdinalIgnoreCase));
-            await LoadAsync();
+            QueueDebouncedRefresh();
         }
         catch (Exception ex)
         {
@@ -176,6 +273,31 @@ else
     {
         message = value;
         messageIsError = isError;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true;
+        pageCancellation?.Cancel();
+
+        lock (debounceLock)
+        {
+            debounceCancellation?.Cancel();
+        }
+
+        if (refreshLoopTask is not null)
+        {
+            try
+            {
+                await refreshLoopTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        pageCancellation?.Dispose();
+        refreshGate.Dispose();
     }
 
     private static string DisplayValue(string? value) =>

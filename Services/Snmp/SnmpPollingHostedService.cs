@@ -19,6 +19,8 @@ public sealed class SnmpPollingHostedService(
     IOptions<SnmpRuntimeOptions> runtimeOptions,
     ILogger<SnmpPollingHostedService> logger) : BackgroundService
 {
+    private readonly Dictionary<string, DateTimeOffset> lastPollBySourcePath = new(StringComparer.OrdinalIgnoreCase);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         runtime.SetAcquisition(RuntimeSubsystemStatus.Starting, "Starting SNMP polling.");
@@ -35,7 +37,7 @@ public sealed class SnmpPollingHostedService(
                 var agents = await db.SnmpAgentConfigs
                     .AsNoTracking()
                     .Include(a => a.CredentialConfig)
-                    .Include(a => a.Points.Where(p => p.PollEnabled))
+                    .Include(a => a.Points.Where(p => p.Access != SnmpAccessModes.WriteOnly))
                     .Where(a => a.Enabled)
                     .OrderBy(a => a.AgentId)
                     .ToListAsync(stoppingToken);
@@ -53,9 +55,12 @@ public sealed class SnmpPollingHostedService(
                     await PollAgentAsync(db, snmp, pointState, agent, stoppingToken);
                 }
 
-                var delay = agents.Count == 0
-                    ? runtimeOptions.Value.DefaultPollingRateMs
-                    : Math.Max(100, agents.Min(a => a.PollingRateMs > 0 ? a.PollingRateMs : runtimeOptions.Value.DefaultPollingRateMs));
+                var configuredRates = agents
+                    .Where(a => a.Points.Count > 0)
+                    .Select(AgentPollingIntervalMs)
+                    .Where(rate => rate > 0)
+                    .DefaultIfEmpty(runtimeOptions.Value.DefaultPollingRateMs);
+                var delay = Math.Max(100, configuredRates.Min());
                 await Task.Delay(delay, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -77,7 +82,16 @@ public sealed class SnmpPollingHostedService(
         SnmpAgentConfig agent,
         CancellationToken cancellationToken)
     {
-        var points = agent.Points.Where(p => p.PollEnabled).OrderBy(p => p.NumericOid).ToList();
+        var allPoints = agent.Points.Where(p => SnmpAccessModes.CanRead(p.Access)).OrderBy(p => p.NumericOid).ToList();
+        var now = DateTimeOffset.UtcNow;
+        var points = allPoints
+            .Where(p => ShouldPoll(agent, p, now))
+            .ToList();
+        if (points.Count == 0)
+        {
+            return;
+        }
+
         foreach (var point in points)
         {
             var get = await snmp.GetAsync(agent, agent.CredentialConfig, point.NumericOid, cancellationToken);
@@ -85,11 +99,15 @@ public sealed class SnmpPollingHostedService(
             {
                 cache.MarkAgentBad(
                     agent.AgentId,
-                    points.Select(p => (p.SourcePath, p.NumericOid)),
+                    allPoints.Select(p => (p.SourcePath, p.NumericOid)),
                     get.ErrorCode ?? SnmpOperationStatus.Failed,
                     get.ErrorMessage ?? "Agent-level SNMP failure.");
+                foreach (var affected in allPoints)
+                {
+                    lastPollBySourcePath[affected.SourcePath] = now;
+                }
 
-                await WriteAgentBadToRedisAsync(db, pointState, points, get, cancellationToken);
+                await WriteAgentBadToRedisAsync(db, pointState, allPoints, get, cancellationToken);
                 return;
             }
 
@@ -104,10 +122,25 @@ public sealed class SnmpPollingHostedService(
                 result.RawValue,
                 result.ErrorCode,
                 result.ErrorMessage));
+            lastPollBySourcePath[point.SourcePath] = now;
 
             await WritePointToRedisAsync(db, pointState, point.SourcePath, result.Value, result.Quality, cancellationToken);
         }
     }
+
+    private bool ShouldPoll(SnmpAgentConfig agent, SnmpPointConfig point, DateTimeOffset now)
+    {
+        var intervalMs = AgentPollingIntervalMs(agent);
+        if (intervalMs <= 0 || !lastPollBySourcePath.TryGetValue(point.SourcePath, out var lastPoll))
+        {
+            return true;
+        }
+
+        return now - lastPoll >= TimeSpan.FromMilliseconds(intervalMs);
+    }
+
+    private int AgentPollingIntervalMs(SnmpAgentConfig agent) =>
+        agent.PollingRateMs > 0 ? agent.PollingRateMs : runtimeOptions.Value.DefaultPollingRateMs;
 
     private async Task WriteAgentBadToRedisAsync(
         AppDbContext db,

@@ -6,10 +6,10 @@ namespace Ptlk.RedisSnmp.Services.Snmp;
 public sealed class NetSnmpArgumentBuilder(SnmpCredentialService credentials)
 {
     public NetSnmpCommandArguments BuildGet(SnmpAgentConfig agent, SnmpCredentialConfig? credential, string numericOid) =>
-        BuildBase("snmpget", agent, credential, [NormalizeCliOid(numericOid)]);
+        BuildBase("snmpget", SnmpCommunityPurpose.Read, agent, credential, [NormalizeCliOid(numericOid)]);
 
     public NetSnmpCommandArguments BuildWalk(SnmpAgentConfig agent, SnmpCredentialConfig? credential, string rootOid) =>
-        BuildBase("snmpwalk", agent, credential, [NormalizeCliOid(rootOid)]);
+        BuildBase("snmpwalk", SnmpCommunityPurpose.Read, agent, credential, [NormalizeCliOid(rootOid)]);
 
     public NetSnmpCommandArguments BuildSet(
         SnmpAgentConfig agent,
@@ -17,11 +17,31 @@ public sealed class NetSnmpArgumentBuilder(SnmpCredentialService credentials)
         string numericOid,
         string valueType,
         string value) =>
-        BuildBase("snmpset", agent, credential, [NormalizeCliOid(numericOid), ToSetType(valueType), value]);
+        BuildBase("snmpset", SnmpCommunityPurpose.Write, agent, credential, [NormalizeCliOid(numericOid), ToSetType(valueType), value]);
 
-    public NetSnmpCommandArguments BuildTranslate(string input, bool numeric = true)
+    public NetSnmpCommandArguments BuildTranslate(
+        string input,
+        bool numeric = true,
+        IReadOnlyList<string>? mibDirectories = null,
+        bool loadAllMibs = false)
     {
-        var args = numeric ? new[] { "-On", input } : new[] { input };
+        var args = new List<string>();
+        if (mibDirectories is { Count: > 0 })
+        {
+            args.AddRange(["-M", string.Join(Path.PathSeparator, mibDirectories)]);
+        }
+
+        if (loadAllMibs)
+        {
+            args.AddRange(["-m", "ALL"]);
+        }
+
+        if (numeric)
+        {
+            args.Add("-On");
+        }
+
+        args.Add(input);
         return new NetSnmpCommandArguments("snmptranslate", args, args);
     }
 
@@ -33,18 +53,19 @@ public sealed class NetSnmpArgumentBuilder(SnmpCredentialService credentials)
 
     private NetSnmpCommandArguments BuildBase(
         string tool,
+        SnmpCommunityPurpose communityPurpose,
         SnmpAgentConfig agent,
         SnmpCredentialConfig? credential,
         IReadOnlyList<string> tail)
     {
         var version = agent.SnmpVersion;
-        var args = new List<string> { "-v", version, "-t", Seconds(agent.TimeoutMs), "-r", agent.RetryCount.ToString() };
+        var args = new List<string> { "-v", ToNetSnmpVersion(version), "-On", "-t", Seconds(agent.TimeoutMs), "-r", agent.RetryCount.ToString() };
         var redacted = new List<string>(args);
-        var secrets = credential is null ? new SnmpCredentialSecrets(null, null, null) : credentials.RevealSecrets(credential);
+        var secrets = credential is null ? new SnmpCredentialSecrets(null, null, null, null) : credentials.RevealSecrets(credential);
 
         if (version is SnmpVersions.V1 or SnmpVersions.V2C)
         {
-            args.AddRange(["-c", secrets.Community ?? "public"]);
+            args.AddRange(["-c", SelectCommunity(secrets, communityPurpose) ?? "public"]);
             redacted.AddRange(["-c", "***"]);
         }
         else if (version == SnmpVersions.V3)
@@ -93,6 +114,15 @@ public sealed class NetSnmpArgumentBuilder(SnmpCredentialService credentials)
     private static string NormalizeCliOid(string numericOid) =>
         numericOid.StartsWith('.') ? numericOid : "." + numericOid;
 
+    private static string ToNetSnmpVersion(string version) =>
+        version switch
+        {
+            SnmpVersions.V1 => "1",
+            SnmpVersions.V2C => "2c",
+            SnmpVersions.V3 => "3",
+            _ => throw new InvalidOperationException($"Unsupported SNMP version '{version}'.")
+        };
+
     private static string ToSetType(string valueType) =>
         valueType switch
         {
@@ -103,4 +133,15 @@ public sealed class NetSnmpArgumentBuilder(SnmpCredentialService credentials)
             SnmpValueTypes.Oid => "o",
             _ => "s"
         };
+
+    private static string? SelectCommunity(SnmpCredentialSecrets secrets, SnmpCommunityPurpose purpose) =>
+        purpose == SnmpCommunityPurpose.Write
+            ? secrets.WriteCommunity ?? secrets.ReadCommunity
+            : secrets.ReadCommunity ?? secrets.WriteCommunity;
+
+    private enum SnmpCommunityPurpose
+    {
+        Read,
+        Write
+    }
 }

@@ -10,6 +10,8 @@ public sealed class SnmpAgentConfig
     public string SnmpVersion { get; set; } = "v2c";
     public int? CredentialConfigId { get; set; }
     public SnmpCredentialConfig? CredentialConfig { get; set; }
+    public int? PreferredMibSetId { get; set; }
+    public MibSet? PreferredMibSet { get; set; }
     public int TimeoutMs { get; set; } = 5000;
     public int RetryCount { get; set; } = 1;
     public int PollingRateMs { get; set; } = 1000;

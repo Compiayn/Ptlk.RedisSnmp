@@ -85,9 +85,9 @@ public sealed class CommandExecutionService(
             return await RejectAsync(command, requestedPayload, "missing_point", $"No SNMP point exists for {mapping.SourcePath}.", cancellationToken);
         }
 
-        if (!point.SetEnabled || point.Access == SnmpAccessModes.ReadOnly)
+        if (!SnmpAccessModes.CanWrite(point.Access))
         {
-            return await RejectAsync(command, requestedPayload, "set_disabled", $"SNMP Set is not enabled for {mapping.SourcePath}.", cancellationToken);
+            return await RejectAsync(command, requestedPayload, "set_disabled", $"SNMP access does not allow Set for {mapping.SourcePath}.", cancellationToken);
         }
 
         var existing = await db.CommandExecutions
@@ -167,9 +167,9 @@ public sealed class CommandExecutionService(
         {
             return new CommandDispatchResult("failed", "No SNMP point found.", null);
         }
-        if (!point.SetEnabled || point.Access == SnmpAccessModes.ReadOnly)
+        if (!SnmpAccessModes.CanWrite(point.Access))
         {
-            return new CommandDispatchResult("failed", "SNMP Set is not enabled.", null);
+            return new CommandDispatchResult("failed", "SNMP access does not allow Set.", null);
         }
 
         var result = await snmp.SetAsync(point.AgentConfig, point.AgentConfig.CredentialConfig, point, value, null, cancellationToken);
