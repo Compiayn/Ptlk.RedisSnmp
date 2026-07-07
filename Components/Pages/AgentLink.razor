@@ -4,119 +4,441 @@
 @inject SnmpAgentService Agents
 @inject SnmpPointService Points
 
-<h1>AgentLink</h1>
-
-<section class="form-band">
-    <h2>Credential</h2>
-    <div class="row g-2">
-        <div class="col"><input class="form-control" placeholder="Name" @bind="credential.Name" /></div>
-        <div class="col">
-            <select class="form-select" @bind="credential.Version">
-                <option value="v1">v1</option>
-                <option value="v2c">v2c</option>
-                <option value="v3">v3</option>
-            </select>
-        </div>
-        <div class="col"><input class="form-control" placeholder="Community" @bind="community" /></div>
-        <div class="col-auto"><button class="btn btn-primary" @onclick="SaveCredentialAsync">Save</button></div>
+<div class="page-header">
+    <div>
+        <h1>AgentLink</h1>
+        <p class="page-kicker">SNMP credentials, agents, and points are managed as separate configuration records.</p>
     </div>
-</section>
-
-<section class="form-band">
-    <h2>Agent</h2>
-    <div class="row g-2">
-        <div class="col"><input class="form-control" placeholder="AgentId" @bind="agent.AgentId" /></div>
-        <div class="col"><input class="form-control" placeholder="Display name" @bind="agent.DisplayName" /></div>
-        <div class="col"><input class="form-control" placeholder="Host" @bind="agent.Host" /></div>
-        <div class="col-1"><input class="form-control" type="number" @bind="agent.Port" /></div>
-        <div class="col">
-            <select class="form-select" @bind="agent.CredentialConfigId">
-                <option value="">No credential</option>
-                @foreach (var item in credentials)
-                {
-                    <option value="@item.Id">@item.Name</option>
-                }
-            </select>
-        </div>
-        <div class="col-auto"><button class="btn btn-primary" @onclick="SaveAgentAsync">Save</button></div>
-    </div>
-</section>
-
-<section class="form-band">
-    <h2>Point</h2>
-    <div class="row g-2">
-        <div class="col">
-            <select class="form-select" @bind="point.AgentConfigId">
-                <option value="0">Select agent</option>
-                @foreach (var item in agents)
-                {
-                    <option value="@item.Id">@item.AgentId</option>
-                }
-            </select>
-        </div>
-        <div class="col"><input class="form-control" placeholder="Point name" @bind="point.PointName" /></div>
-        <div class="col"><input class="form-control" placeholder="Numeric OID" @bind="point.NumericOid" /></div>
-        <div class="col">
-            <select class="form-select" @bind="point.ValueType">
-                <option value="string">string</option>
-                <option value="integer">integer</option>
-                <option value="double">double</option>
-                <option value="boolean">boolean</option>
-                <option value="timeticks">timeticks</option>
-                <option value="oid">oid</option>
-            </select>
-        </div>
-        <div class="col">
-            <select class="form-select" @bind="point.Access">
-                <option value="ro">ro</option>
-                <option value="rw">rw</option>
-                <option value="wo">wo</option>
-            </select>
-        </div>
-        <div class="col-auto form-check form-switch">
-            <input class="form-check-input" type="checkbox" @bind="point.SetEnabled" />
-            <label class="form-check-label">Set</label>
-        </div>
-        <div class="col-auto"><button class="btn btn-primary" @onclick="SavePointAsync">Save</button></div>
-    </div>
-</section>
+</div>
 
 @if (!string.IsNullOrWhiteSpace(message))
 {
-    <div class="alert alert-info">@message</div>
+    <div class="@AlertClass">@message</div>
 }
 
-<h2>Agents</h2>
-<table class="table table-sm">
-    <thead><tr><th>AgentId</th><th>Host</th><th>Credential</th><th>Points</th></tr></thead>
-    <tbody>
-    @foreach (var item in agents)
-    {
-        <tr><td>@item.AgentId</td><td>@item.Host:@item.Port</td><td>@item.CredentialConfig?.Name</td><td>@item.Points.Count</td></tr>
-    }
-    </tbody>
-</table>
+<div class="toolbar">
+    <div>
+        <h2 class="toolbar-title">Credentials</h2>
+        <div class="muted-metadata">Secrets are never displayed; leave password fields blank to keep existing values.</div>
+    </div>
+    <button class="btn btn-primary" type="button" @onclick="() => OpenCredentialDialog()">Add Credential</button>
+</div>
 
-<h2>Points</h2>
-<table class="table table-sm">
-    <thead><tr><th>SourcePath</th><th>Name</th><th>OID</th><th>Access</th><th>Set</th></tr></thead>
-    <tbody>
-    @foreach (var item in points)
-    {
-        <tr><td>@item.SourcePath</td><td>@item.PointName</td><td>@item.NumericOid</td><td>@item.Access</td><td>@item.SetEnabled</td></tr>
-    }
-    </tbody>
-</table>
+@if (credentials.Count == 0)
+{
+    <div class="empty-state">No SNMP credentials are configured.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Version</th>
+                    <th>Security</th>
+                    <th>Description</th>
+                    <th class="numeric">Updated</th>
+                    <th class="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in credentials)
+            {
+                <tr>
+                    <td>@item.Name</td>
+                    <td><span class="status-badge neutral">@item.Version</span></td>
+                    <td>@SecuritySummary(item)</td>
+                    <td>@(item.Description ?? "-")</td>
+                    <td class="numeric">@FormatDate(item.UpdatedAt)</td>
+                    <td class="actions">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenCredentialDialog(item)">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenCredentialDeleteDialog(item)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+<div class="toolbar">
+    <div>
+        <h2 class="toolbar-title">Agents</h2>
+        <div class="muted-metadata">Connection status is evaluated by runtime polling, not by this configuration grid.</div>
+    </div>
+    <button class="btn btn-primary" type="button" @onclick="() => OpenAgentDialog()">Add Agent</button>
+</div>
+
+@if (agents.Count == 0)
+{
+    <div class="empty-state">No SNMP agents are configured.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Agent ID</th>
+                    <th>Display name</th>
+                    <th>Endpoint</th>
+                    <th>Credential</th>
+                    <th>Status</th>
+                    <th class="numeric">Poll ms</th>
+                    <th class="numeric">Points</th>
+                    <th class="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in agents)
+            {
+                <tr>
+                    <td><code>@item.AgentId</code></td>
+                    <td>@item.DisplayName</td>
+                    <td>@item.Host:@item.Port</td>
+                    <td>@(item.CredentialConfig?.Name ?? "-")</td>
+                    <td><span class="@StatusBadgeClass(item.Enabled ? "normal" : "disabled")">@(item.Enabled ? "enabled" : "disabled")</span></td>
+                    <td class="numeric">@item.PollingRateMs</td>
+                    <td class="numeric">@item.Points.Count</td>
+                    <td class="actions">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenAgentDialog(item)">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenAgentDeleteDialog(item)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+<div class="toolbar">
+    <div>
+        <h2 class="toolbar-title">Points</h2>
+        <div class="muted-metadata">Source paths are generated from agent ID and normalized numeric OID.</div>
+    </div>
+    <button class="btn btn-primary" type="button" @onclick="() => OpenPointDialog()" disabled="@(agents.Count == 0)">Add Point</button>
+</div>
+
+@if (points.Count == 0)
+{
+    <div class="empty-state">No SNMP points are configured.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Point</th>
+                    <th>Agent</th>
+                    <th>OID</th>
+                    <th>Value type</th>
+                    <th>Access</th>
+                    <th>Polling</th>
+                    <th>Set</th>
+                    <th class="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in points)
+            {
+                <tr>
+                    <td>
+                        <div>@item.PointName</div>
+                        <small>@item.SourcePath</small>
+                    </td>
+                    <td>@(item.AgentConfig?.AgentId ?? "-")</td>
+                    <td><code>@item.NumericOid</code></td>
+                    <td>@item.ValueType</td>
+                    <td><span class="status-badge neutral">@item.Access</span></td>
+                    <td><span class="@StatusBadgeClass(item.PollEnabled ? "normal" : "disabled")">@(item.PollEnabled ? "enabled" : "disabled")</span></td>
+                    <td><span class="@StatusBadgeClass(item.SetEnabled ? "normal" : "disabled")">@(item.SetEnabled ? "enabled" : "disabled")</span></td>
+                    <td class="actions">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenPointDialog(item)">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenPointDeleteDialog(item)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (credentialDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseCredentialDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@((credential.Id > 0) ? "Edit Credential" : "Add Credential")</h2>
+                <div class="muted-metadata">Secret fields are write-only.</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseCredentialDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="credential.Name" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">SNMP version</label>
+                    <select class="form-select" @bind="credential.Version">
+                        <option value="@SnmpVersions.V1">v1</option>
+                        <option value="@SnmpVersions.V2C">v2c</option>
+                        <option value="@SnmpVersions.V3">v3</option>
+                    </select>
+                </div>
+                @if (credential.Version == SnmpVersions.V1 || credential.Version == SnmpVersions.V2C)
+                {
+                    <div class="col-12">
+                        <label class="form-label">Community</label>
+                        <input class="form-control" type="password" @bind="community" autocomplete="new-password" />
+                        <div class="form-text">Leave blank while editing to keep the stored community.</div>
+                    </div>
+                }
+                @if (credential.Version == SnmpVersions.V3)
+                {
+                    <div class="col-md-6">
+                        <label class="form-label">Security name</label>
+                        <input class="form-control" @bind="credential.SecurityName" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Security level</label>
+                        <select class="form-select" @bind="credential.SecurityLevel">
+                            <option value="@SnmpSecurityLevels.NoAuthNoPriv">noAuthNoPriv</option>
+                            <option value="@SnmpSecurityLevels.AuthNoPriv">authNoPriv</option>
+                            <option value="@SnmpSecurityLevels.AuthPriv">authPriv</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Auth protocol</label>
+                        <input class="form-control" @bind="credential.AuthProtocol" placeholder="SHA" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Auth password</label>
+                        <input class="form-control" type="password" @bind="authPassword" autocomplete="new-password" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Privacy protocol</label>
+                        <input class="form-control" @bind="credential.PrivProtocol" placeholder="AES" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Privacy password</label>
+                        <input class="form-control" type="password" @bind="privPassword" autocomplete="new-password" />
+                    </div>
+                }
+                <div class="col-12">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="2" @bind="credential.Description"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseCredentialDialog">Cancel</button>
+            <button class="btn btn-primary" type="button" @onclick="SaveCredentialAsync">Save</button>
+        </div>
+    </div>
+}
+
+@if (agentDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseAgentDialog"></div>
+    <div class="dialog-panel wide" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@((agent.Id > 0) ? "Edit Agent" : "Add Agent")</h2>
+                <div class="muted-metadata">Runtime health is shown on Browser and Status after polling.</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseAgentDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Agent ID</label>
+                    <input class="form-control" @bind="agent.AgentId" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Display name</label>
+                    <input class="form-control" @bind="agent.DisplayName" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Credential</label>
+                    <select class="form-select" @bind="agent.CredentialConfigId">
+                        <option value="">No credential</option>
+                        @foreach (var item in credentials)
+                        {
+                            <option value="@item.Id">@item.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Host</label>
+                    <input class="form-control" @bind="agent.Host" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Port</label>
+                    <input class="form-control numeric" type="number" @bind="agent.Port" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">SNMP version</label>
+                    <select class="form-select" @bind="agent.SnmpVersion">
+                        <option value="@SnmpVersions.V1">v1</option>
+                        <option value="@SnmpVersions.V2C">v2c</option>
+                        <option value="@SnmpVersions.V3">v3</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Timeout ms</label>
+                    <input class="form-control numeric" type="number" @bind="agent.TimeoutMs" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Retries</label>
+                    <input class="form-control numeric" type="number" @bind="agent.RetryCount" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Polling rate ms</label>
+                    <input class="form-control numeric" type="number" @bind="agent.PollingRateMs" />
+                </div>
+                <div class="col-12">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" id="agent-enabled" type="checkbox" @bind="agent.Enabled" />
+                        <label class="form-check-label" for="agent-enabled">Enabled</label>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="2" @bind="agent.Description"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseAgentDialog">Cancel</button>
+            <button class="btn btn-primary" type="button" @onclick="SaveAgentAsync">Save</button>
+        </div>
+    </div>
+}
+
+@if (pointDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="ClosePointDialog"></div>
+    <div class="dialog-panel wide" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@((point.Id > 0) ? "Edit Point" : "Add Point")</h2>
+                <div class="muted-metadata">Mapping to Redis is configured separately.</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="ClosePointDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Agent</label>
+                    <select class="form-select" @bind="point.AgentConfigId">
+                        <option value="0">Select agent</option>
+                        @foreach (var item in agents)
+                        {
+                            <option value="@item.Id">@item.AgentId</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Point name</label>
+                    <input class="form-control" @bind="point.PointName" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Numeric OID</label>
+                    <input class="form-control" @bind="point.NumericOid" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Value type</label>
+                    <select class="form-select" @bind="point.ValueType">
+                        <option value="@SnmpValueTypes.String">string</option>
+                        <option value="@SnmpValueTypes.Integer">integer</option>
+                        <option value="@SnmpValueTypes.Double">double</option>
+                        <option value="@SnmpValueTypes.Boolean">boolean</option>
+                        <option value="@SnmpValueTypes.Timeticks">timeticks</option>
+                        <option value="@SnmpValueTypes.Oid">oid</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Access</label>
+                    <select class="form-select" @bind="point.Access">
+                        <option value="@SnmpAccessModes.ReadOnly">ro</option>
+                        <option value="@SnmpAccessModes.ReadWrite">rw</option>
+                        <option value="@SnmpAccessModes.WriteOnly">wo</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">MIB label</label>
+                    <input class="form-control" @bind="point.MibLabel" />
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check form-switch mt-4">
+                        <input class="form-check-input" id="point-poll" type="checkbox" @bind="point.PollEnabled" />
+                        <label class="form-check-label" for="point-poll">Polling enabled</label>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check form-switch mt-4">
+                        <input class="form-check-input" id="point-set" type="checkbox" @bind="point.SetEnabled" />
+                        <label class="form-check-label" for="point-set">SNMP Set enabled</label>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="2" @bind="point.Description"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="ClosePointDialog">Cancel</button>
+            <button class="btn btn-primary" type="button" @onclick="SavePointAsync">Save</button>
+        </div>
+    </div>
+}
+
+@if (deleteKind is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseDeleteDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <h2 class="m-0">Confirm Delete</h2>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseDeleteDialog"></button>
+        </div>
+        <div class="dialog-body">
+            Delete <strong>@deleteName</strong> from @deleteKind records?
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseDeleteDialog">Cancel</button>
+            <button class="btn btn-danger" type="button" @onclick="ConfirmDeleteAsync">Delete</button>
+        </div>
+    </div>
+}
 
 @code {
     private List<SnmpCredentialConfig> credentials = [];
     private List<SnmpAgentConfig> agents = [];
     private List<SnmpPointConfig> points = [];
-    private SnmpCredentialConfig credential = new() { Version = "v2c" };
-    private SnmpAgentConfig agent = new() { Port = 161, SnmpVersion = "v2c", TimeoutMs = 5000, RetryCount = 1, PollingRateMs = 1000, Enabled = true };
-    private SnmpPointConfig point = new() { ValueType = "string", Access = "ro", PollEnabled = true };
+
+    private SnmpCredentialConfig credential = NewCredential();
+    private SnmpAgentConfig agent = NewAgent();
+    private SnmpPointConfig point = NewPoint();
+
     private string? community;
+    private string? authPassword;
+    private string? privPassword;
     private string? message;
+    private bool messageIsError;
+    private bool credentialDialogOpen;
+    private bool agentDialogOpen;
+    private bool pointDialogOpen;
+    private string? deleteKind;
+    private int deleteId;
+    private string deleteName = "";
+
+    private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -127,17 +449,46 @@
         points = await Points.ListAsync();
     }
 
+    private void OpenCredentialDialog(SnmpCredentialConfig? item = null)
+    {
+        credential = item is null ? NewCredential() : CopyCredential(item);
+        community = null;
+        authPassword = null;
+        privPassword = null;
+        credentialDialogOpen = true;
+    }
+
+    private void CloseCredentialDialog() => credentialDialogOpen = false;
+
+    private void OpenAgentDialog(SnmpAgentConfig? item = null)
+    {
+        agent = item is null ? NewAgent() : CopyAgent(item);
+        agentDialogOpen = true;
+    }
+
+    private void CloseAgentDialog() => agentDialogOpen = false;
+
+    private void OpenPointDialog(SnmpPointConfig? item = null)
+    {
+        point = item is null ? NewPoint() : CopyPoint(item);
+        pointDialogOpen = true;
+    }
+
+    private void ClosePointDialog() => pointDialogOpen = false;
+
     private async Task SaveCredentialAsync()
     {
         try
         {
-            await Credentials.CreateOrUpdateAsync(credential, new SnmpCredentialSecrets(community, null, null));
-            credential = new() { Version = "v2c" };
-            community = null;
-            message = "Credential saved.";
+            await Credentials.CreateOrUpdateAsync(credential, new SnmpCredentialSecrets(community, authPassword, privPassword));
+            credentialDialogOpen = false;
+            SetMessage("Credential saved.");
             await LoadAsync();
         }
-        catch (Exception ex) { message = ex.Message; }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
     }
 
     private async Task SaveAgentAsync()
@@ -145,11 +496,14 @@
         try
         {
             await Agents.CreateOrUpdateAsync(agent);
-            agent = new() { Port = 161, SnmpVersion = "v2c", TimeoutMs = 5000, RetryCount = 1, PollingRateMs = 1000, Enabled = true };
-            message = "Agent saved.";
+            agentDialogOpen = false;
+            SetMessage("Agent saved.");
             await LoadAsync();
         }
-        catch (Exception ex) { message = ex.Message; }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
     }
 
     private async Task SavePointAsync()
@@ -157,10 +511,152 @@
         try
         {
             await Points.CreateOrUpdateAsync(point);
-            point = new() { ValueType = "string", Access = "ro", PollEnabled = true };
-            message = "Point saved.";
+            pointDialogOpen = false;
+            SetMessage("Point saved.");
             await LoadAsync();
         }
-        catch (Exception ex) { message = ex.Message; }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
     }
+
+    private void OpenCredentialDeleteDialog(SnmpCredentialConfig item) =>
+        OpenDeleteDialog("credential", item.Id, item.Name);
+
+    private void OpenAgentDeleteDialog(SnmpAgentConfig item) =>
+        OpenDeleteDialog("agent", item.Id, item.AgentId);
+
+    private void OpenPointDeleteDialog(SnmpPointConfig item) =>
+        OpenDeleteDialog("point", item.Id, item.PointName);
+
+    private void OpenDeleteDialog(string kind, int id, string name)
+    {
+        deleteKind = kind;
+        deleteId = id;
+        deleteName = name;
+    }
+
+    private void CloseDeleteDialog()
+    {
+        deleteKind = null;
+        deleteId = 0;
+        deleteName = "";
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        try
+        {
+            switch (deleteKind)
+            {
+                case "credential":
+                    await Credentials.DeleteAsync(deleteId);
+                    break;
+                case "agent":
+                    await Agents.DeleteAsync(deleteId);
+                    break;
+                case "point":
+                    await Points.DeleteAsync(deleteId);
+                    break;
+            }
+
+            var deleted = deleteKind;
+            CloseDeleteDialog();
+            SetMessage($"{deleted} deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+    }
+
+    private void SetMessage(string value, bool isError = false)
+    {
+        message = value;
+        messageIsError = isError;
+    }
+
+    private static SnmpCredentialConfig NewCredential() =>
+        new() { Version = SnmpVersions.V2C, SecurityLevel = SnmpSecurityLevels.NoAuthNoPriv };
+
+    private static SnmpAgentConfig NewAgent() =>
+        new() { Port = 161, SnmpVersion = SnmpVersions.V2C, TimeoutMs = 5000, RetryCount = 1, PollingRateMs = 1000, Enabled = true };
+
+    private static SnmpPointConfig NewPoint() =>
+        new() { ValueType = SnmpValueTypes.String, Access = SnmpAccessModes.ReadOnly, PollEnabled = true };
+
+    private static SnmpCredentialConfig CopyCredential(SnmpCredentialConfig source) =>
+        new()
+        {
+            Id = source.Id,
+            Name = source.Name,
+            Version = source.Version,
+            SecurityName = source.SecurityName,
+            SecurityLevel = source.SecurityLevel,
+            AuthProtocol = source.AuthProtocol,
+            PrivProtocol = source.PrivProtocol,
+            Description = source.Description
+        };
+
+    private static SnmpAgentConfig CopyAgent(SnmpAgentConfig source) =>
+        new()
+        {
+            Id = source.Id,
+            AgentId = source.AgentId,
+            DisplayName = source.DisplayName,
+            Host = source.Host,
+            Port = source.Port,
+            SnmpVersion = source.SnmpVersion,
+            CredentialConfigId = source.CredentialConfigId,
+            TimeoutMs = source.TimeoutMs,
+            RetryCount = source.RetryCount,
+            PollingRateMs = source.PollingRateMs,
+            Enabled = source.Enabled,
+            Description = source.Description
+        };
+
+    private static SnmpPointConfig CopyPoint(SnmpPointConfig source) =>
+        new()
+        {
+            Id = source.Id,
+            AgentConfigId = source.AgentConfigId,
+            PointName = source.PointName,
+            SourcePath = source.SourcePath,
+            NumericOid = source.NumericOid,
+            ValueType = source.ValueType,
+            PollEnabled = source.PollEnabled,
+            SetEnabled = source.SetEnabled,
+            Access = source.Access,
+            Description = source.Description,
+            MibLabel = source.MibLabel
+        };
+
+    private static string SecuritySummary(SnmpCredentialConfig item)
+    {
+        if (item.Version != SnmpVersions.V3)
+        {
+            return "community";
+        }
+
+        return string.IsNullOrWhiteSpace(item.SecurityLevel)
+            ? SnmpSecurityLevels.NoAuthNoPriv
+            : item.SecurityLevel;
+    }
+
+    private static string StatusBadgeClass(string? status)
+    {
+        var normalized = status?.ToLowerInvariant();
+        return normalized switch
+        {
+            "normal" or "good" or "enabled" => "status-badge success",
+            "starting" or "unset" => "status-badge warning",
+            "degraded" or "bad" or "failed" or "error" => "status-badge danger",
+            _ => "status-badge neutral"
+        };
+    }
+
+    private static string FormatDate(DateTime value) =>
+        value == default ? "-" : value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
 }

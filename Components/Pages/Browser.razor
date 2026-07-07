@@ -4,75 +4,152 @@
 @inject CommandDispatcherService Dispatcher
 @inject CommandExecutionService Commands
 
-<h1>Browser</h1>
-
-<button class="btn btn-outline-primary mb-3" @onclick="LoadAsync">Refresh</button>
-
-<table class="table table-sm align-middle">
-    <thead>
-        <tr><th>Agent</th><th>Point</th><th>Local</th><th>Quality</th><th>Redis</th><th>Ownership</th><th>Write</th></tr>
-    </thead>
-    <tbody>
-    @foreach (var row in rows)
-    {
-        <tr>
-            <td>@row.AgentId</td>
-            <td><div>@row.PointName</div><small>@row.SourcePath</small></td>
-            <td>@row.LocalValue</td>
-            <td>@row.LocalQuality</td>
-            <td>
-                @if (row.RedisKey is null)
-                {
-                    <span>No Redis mapping.</span>
-                }
-                else
-                {
-                    <div>@row.RedisKey</div>
-                    <small>v@(row.RedisState?.Version.ToString() ?? "-") @row.RedisState?.Quality</small>
-                }
-            </td>
-            <td>@(row.Owned ? "owned" : row.OwnershipStatus)</td>
-            <td>
-                <div class="input-group input-group-sm">
-                    <input class="form-control" @bind="writeValues[row.SourcePath]" />
-                    <button class="btn btn-outline-secondary" @onclick="() => WriteSnmpAsync(row.SourcePath)">SNMP</button>
-                    @if (row.RedisKey is not null)
-                    {
-                        <button class="btn btn-outline-primary" @onclick="() => WriteRedisAsync(row)">Redis</button>
-                    }
-                </div>
-            </td>
-        </tr>
-    }
-    </tbody>
-</table>
+<div class="page-header">
+    <div>
+        <h1>Browser</h1>
+        <p class="page-kicker">Manual snapshot of local SNMP cache, Redis point state, and ownership.</p>
+    </div>
+    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+</div>
 
 @if (!string.IsNullOrWhiteSpace(message))
 {
-    <div class="alert alert-info">@message</div>
+    <div class="@AlertClass">@message</div>
+}
+
+@if (lastLoaded is not null)
+{
+    <div class="muted-metadata mb-3">Snapshot refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
+}
+
+@if (isLoading)
+{
+    <div class="empty-state">Loading browser snapshot...</div>
+}
+else if (rows.Count == 0)
+{
+    <div class="empty-state">No SNMP points are configured, so no runtime values can be displayed.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Agent</th>
+                    <th>Point</th>
+                    <th>Local value</th>
+                    <th>Local quality</th>
+                    <th>Local updated</th>
+                    <th>Redis state</th>
+                    <th>Ownership</th>
+                    <th class="actions">Write</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var row in rows)
+            {
+                <tr>
+                    <td>@row.AgentId</td>
+                    <td>
+                        <div>@row.PointName</div>
+                        <small>@row.SourcePath</small>
+                    </td>
+                    <td class="numeric">@DisplayValue(row.LocalValue)</td>
+                    <td>
+                        <span class="@StatusBadgeClass(row.LocalQuality)">@row.LocalQuality</span>
+                        @if (!string.IsNullOrWhiteSpace(row.LastError))
+                        {
+                            <div><small>@row.LastError</small></div>
+                        }
+                    </td>
+                    <td class="numeric">@FormatTimestamp(row.LocalTimestamp)</td>
+                    <td>
+                        @if (row.RedisKey is null)
+                        {
+                            <span class="status-badge neutral">unmapped</span>
+                        }
+                        else
+                        {
+                            <div><code>@row.RedisKey</code></div>
+                            @if (row.RedisState is null)
+                            {
+                                <small>Redis state unavailable.</small>
+                            }
+                            else
+                            {
+                                <small>
+                                    <span class="@StatusBadgeClass(row.RedisState.Quality)">@row.RedisState.Quality</span>
+                                    v<span class="numeric">@row.RedisState.Version</span>
+                                    @FormatUnixMs(row.RedisState.Timestamp)
+                                </small>
+                            }
+                        }
+                    </td>
+                    <td><span class="@StatusBadgeClass(row.Owned ? "owned" : row.OwnershipStatus)">@OwnershipText(row)</span></td>
+                    <td class="actions">
+                        <div class="input-group input-group-sm">
+                            <input class="form-control" placeholder="value" @bind="writeValues[row.SourcePath]" />
+                            <button class="btn btn-outline-secondary" type="button" @onclick="() => WriteSnmpAsync(row.SourcePath)">SNMP</button>
+                            @if (row.RedisKey is not null)
+                            {
+                                <button class="btn btn-outline-primary" type="button" disabled="@(!row.Owned)" @onclick="() => WriteRedisAsync(row)">Redis</button>
+                            }
+                        </div>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
 }
 
 @code {
     private IReadOnlyList<BrowserPointSnapshot> rows = [];
     private Dictionary<string, string> writeValues = new(StringComparer.OrdinalIgnoreCase);
     private string? message;
+    private bool messageIsError;
+    private bool isLoading;
+    private DateTimeOffset? lastLoaded;
+
+    private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task LoadAsync()
     {
-        rows = await SnapshotService.SnapshotAsync();
-        foreach (var row in rows)
+        try
         {
-            writeValues.TryAdd(row.SourcePath, "");
+            isLoading = true;
+            rows = await SnapshotService.SnapshotAsync();
+            lastLoaded = DateTimeOffset.Now;
+            foreach (var row in rows)
+            {
+                writeValues.TryAdd(row.SourcePath, "");
+            }
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+        finally
+        {
+            isLoading = false;
         }
     }
 
     private async Task WriteSnmpAsync(string sourcePath)
     {
-        var result = await Commands.DirectSnmpWriteAsync(sourcePath, writeValues.GetValueOrDefault(sourcePath) ?? "", "browser");
-        message = $"{result.Status}: {result.Message}";
-        await LoadAsync();
+        try
+        {
+            var result = await Commands.DirectSnmpWriteAsync(sourcePath, writeValues.GetValueOrDefault(sourcePath) ?? "", "browser");
+            SetMessage($"{result.Status}: {result.Message}", result.Status.Equals("failed", StringComparison.OrdinalIgnoreCase));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
     }
 
     private async Task WriteRedisAsync(BrowserPointSnapshot row)
@@ -81,9 +158,47 @@
         {
             return;
         }
-        var mapping = new Ptlk.RedisSnmp.Models.RedisMapping { SourcePath = row.SourcePath, RedisKey = row.RedisKey };
-        var result = await Dispatcher.DispatchHmiWriteAsync(mapping, writeValues.GetValueOrDefault(row.SourcePath) ?? "", "browser");
-        message = $"{result.Status}: {result.Message}";
-        await LoadAsync();
+
+        try
+        {
+            var mapping = new Ptlk.RedisSnmp.Models.RedisMapping { SourcePath = row.SourcePath, RedisKey = row.RedisKey };
+            var result = await Dispatcher.DispatchHmiWriteAsync(mapping, writeValues.GetValueOrDefault(row.SourcePath) ?? "", "browser");
+            SetMessage($"{result.Status}: {result.Message}", result.Status.Equals("failed", StringComparison.OrdinalIgnoreCase));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+    }
+
+    private void SetMessage(string value, bool isError = false)
+    {
+        message = value;
+        messageIsError = isError;
+    }
+
+    private static string DisplayValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value;
+
+    private static string FormatTimestamp(DateTimeOffset? value) =>
+        value is null ? "-" : value.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+
+    private static string FormatUnixMs(long value) =>
+        value <= 0 ? "-" : DateTimeOffset.FromUnixTimeMilliseconds(value).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+
+    private static string OwnershipText(BrowserPointSnapshot row) =>
+        row.Owned ? "owned" : row.OwnershipStatus ?? "not owned";
+
+    private static string StatusBadgeClass(string? status)
+    {
+        var normalized = status?.ToLowerInvariant();
+        return normalized switch
+        {
+            "normal" or "good" or "owned" or "completed" or "accepted" => "status-badge success",
+            "starting" or "unset" or "pending" or "unmapped" => "status-badge warning",
+            "degraded" or "bad" or "failed" or "timeout" or "missing" or "owned_by_other" or "missing_key" => "status-badge danger",
+            _ => "status-badge neutral"
+        };
     }
 }

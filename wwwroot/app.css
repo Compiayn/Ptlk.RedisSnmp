@@ -1,5 +1,7 @@
 html, body {
     font-family: Arial, Helvetica, sans-serif;
+    background: #f5f7f8;
+    color: #1f2933;
 }
 
 a, .btn-link {
@@ -7,37 +9,71 @@ a, .btn-link {
 }
 
 .content {
-    padding-top: 1.1rem;
+    padding-top: 1.25rem;
+    padding-bottom: 2rem;
 }
 
 h1 {
-    font-size: 1.8rem;
-    margin-bottom: 1rem;
+    font-size: 1.65rem;
+    margin-bottom: 0.35rem;
+    font-weight: 700;
 }
 
 h2 {
     font-size: 1.15rem;
     margin-top: 1.5rem;
+    font-weight: 700;
 }
 
-.form-band {
-    border-top: 1px solid #d7dde5;
-    border-bottom: 1px solid #d7dde5;
-    padding: 1rem 0;
+.page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
     margin-bottom: 1rem;
+}
+
+.page-kicker {
+    color: #66717f;
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 1rem 0 0.75rem;
+}
+
+.toolbar-title {
+    margin: 0;
+}
+
+.form-band,
+.surface {
+    background: #ffffff;
+    border: 1px solid #d9e0e7;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 2px rgba(31, 41, 51, 0.04);
 }
 
 .status-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
     gap: 0.75rem;
 }
 
 .status-tile {
+    background: #ffffff;
     border: 1px solid #d7dde5;
     border-radius: 6px;
     padding: 0.8rem;
-    min-height: 120px;
+    min-height: 126px;
+    box-shadow: 0 1px 2px rgba(31, 41, 51, 0.04);
 }
 
 .status-tile .label {
@@ -51,8 +87,154 @@ h2 {
     font-weight: 700;
 }
 
+.status-tile p {
+    margin-bottom: 0;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.55rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.status-badge.success {
+    background: #e5f4ec;
+    color: #14633b;
+}
+
+.status-badge.warning {
+    background: #fff2cf;
+    color: #7a5400;
+}
+
+.status-badge.danger {
+    background: #fde7e7;
+    color: #9b1c1c;
+}
+
+.status-badge.neutral {
+    background: #eef2f5;
+    color: #4f5b67;
+}
+
+.table.data-table {
+    background: #ffffff;
+    border: 1px solid #d9e0e7;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.data-table thead th {
+    color: #56616f;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    background: #f1f4f7;
+    border-bottom: 1px solid #d9e0e7;
+    white-space: nowrap;
+}
+
+.data-table td,
+.data-table th {
+    vertical-align: middle;
+}
+
+.numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.actions {
+    width: 1%;
+    white-space: nowrap;
+    text-align: right;
+}
+
+.empty-state {
+    background: #ffffff;
+    border: 1px dashed #b8c4cf;
+    border-radius: 6px;
+    color: #596675;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.muted-metadata {
+    color: #687583;
+    font-size: 0.85rem;
+}
+
+.code-cell {
+    max-width: 34rem;
+    overflow-wrap: anywhere;
+}
+
+.dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1040;
+    background: rgba(14, 22, 31, 0.46);
+}
+
+.dialog-panel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    z-index: 1050;
+    width: min(760px, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    transform: translate(-50%, -50%);
+    background: #ffffff;
+    border: 1px solid #cfd8e2;
+    border-radius: 8px;
+    box-shadow: 0 20px 54px rgba(14, 22, 31, 0.28);
+}
+
+.dialog-panel.wide {
+    width: min(980px, calc(100vw - 2rem));
+}
+
+.dialog-header,
+.dialog-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 1rem;
+    border-bottom: 1px solid #d9e0e7;
+}
+
+.dialog-footer {
+    justify-content: flex-end;
+    border-top: 1px solid #d9e0e7;
+    border-bottom: 0;
+}
+
+.dialog-body {
+    padding: 1rem;
+}
+
 small {
     color: #5f6c7a;
+}
+
+@media (max-width: 640.98px) {
+    .page-header,
+    .toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .toolbar .btn,
+    .page-header .btn {
+        width: 100%;
+    }
 }
 
 #blazor-error-ui {

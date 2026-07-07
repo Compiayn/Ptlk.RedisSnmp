@@ -2,42 +2,150 @@
 @rendermode InteractiveServer
 @inject LogService Logs
 
-<h1>Log</h1>
+<div class="page-header">
+    <div>
+        <h1>Log</h1>
+        <p class="page-kicker">Recent system and SNMP operation records from the local SQLite log store.</p>
+    </div>
+    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+</div>
 
-<button class="btn btn-outline-primary mb-3" @onclick="LoadAsync">Refresh</button>
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
 
-<h2>System</h2>
-<table class="table table-sm">
-    <thead><tr><th>Time</th><th>Category</th><th>Level</th><th>Message</th></tr></thead>
-    <tbody>
-    @foreach (var item in system.Items)
+@if (lastLoaded is not null)
+{
+    <div class="muted-metadata mb-3">Snapshot refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
+}
+
+@if (isLoading)
+{
+    <div class="empty-state">Loading log records...</div>
+}
+else
+{
+    <div class="toolbar">
+        <div>
+            <h2 class="toolbar-title">System</h2>
+            <div class="muted-metadata">Application, Redis output, ownership, and command diagnostics.</div>
+        </div>
+    </div>
+
+    @if (system.Items.Count == 0)
     {
-        <tr><td>@item.CreatedAt.ToLocalTime()</td><td>@item.Category</td><td>@item.Level</td><td>@item.Message</td></tr>
+        <div class="empty-state">No system log records are available.</div>
     }
-    </tbody>
-</table>
-
-<h2>SNMP</h2>
-<table class="table table-sm">
-    <thead><tr><th>Time</th><th>Agent</th><th>OID</th><th>Operation</th><th>Level</th><th>Message</th></tr></thead>
-    <tbody>
-    @foreach (var item in snmp)
+    else
     {
-        <tr><td>@item.CreatedAt.ToLocalTime()</td><td>@item.AgentId</td><td>@item.NumericOid</td><td>@item.Operation</td><td>@item.Level</td><td>@item.Message</td></tr>
+        <div class="table-responsive">
+            <table class="table table-sm data-table align-middle">
+                <thead>
+                    <tr>
+                        <th class="numeric">Time</th>
+                        <th>Category</th>
+                        <th>Level</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var item in system.Items)
+                {
+                    <tr>
+                        <td class="numeric">@item.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                        <td>@item.Category</td>
+                        <td><span class="@StatusBadgeClass(item.Level)">@item.Level</span></td>
+                        <td>@item.Message</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
     }
-    </tbody>
-</table>
+
+    <div class="toolbar">
+        <div>
+            <h2 class="toolbar-title">SNMP</h2>
+            <div class="muted-metadata">Recent Get, Walk, Set, and parser outcomes.</div>
+        </div>
+    </div>
+
+    @if (snmp.Count == 0)
+    {
+        <div class="empty-state">No SNMP log records are available.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm data-table align-middle">
+                <thead>
+                    <tr>
+                        <th class="numeric">Time</th>
+                        <th>Agent</th>
+                        <th>OID</th>
+                        <th>Operation</th>
+                        <th>Level</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var item in snmp)
+                {
+                    <tr>
+                        <td class="numeric">@item.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                        <td>@item.AgentId</td>
+                        <td><code>@item.NumericOid</code></td>
+                        <td>@item.Operation</td>
+                        <td><span class="@StatusBadgeClass(item.Level)">@item.Level</span></td>
+                        <td>@item.Message</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+}
 
 @code {
     private PagedResult<SystemLogEntry> system = new([], 0, 1, 50);
     private IReadOnlyList<SnmpLogEntry> snmp = [];
+    private string? error;
+    private bool isLoading;
+    private DateTimeOffset? lastLoaded;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task LoadAsync()
     {
-        var query = new LogQuery(null, null, null, null, null, null, 1, 50);
-        system = await Logs.QuerySystemAsync(query);
-        snmp = await Logs.QueryRecentSnmpAsync(query);
+        try
+        {
+            isLoading = true;
+            error = null;
+            var query = new LogQuery(null, null, null, null, null, null, 1, 50);
+            system = await Logs.QuerySystemAsync(query);
+            snmp = await Logs.QueryRecentSnmpAsync(query);
+            lastLoaded = DateTimeOffset.Now;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private static string StatusBadgeClass(string? level)
+    {
+        var normalized = level?.ToLowerInvariant();
+        return normalized switch
+        {
+            "info" or "normal" or "success" => "status-badge success",
+            "warning" => "status-badge warning",
+            "error" or "critical" or "failed" => "status-badge danger",
+            _ => "status-badge neutral"
+        };
     }
 }

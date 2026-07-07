@@ -3,28 +3,110 @@
 @inject LogService Logs
 @inject RuntimeModeService Runtime
 
-<h1>Trap</h1>
+<div class="page-header">
+    <div>
+        <h1>Trap</h1>
+        <p class="page-kicker">Recent trap log entries captured by the Net-SNMP trap receiver.</p>
+    </div>
+    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+</div>
 
-<p>@Runtime.Current.TrapStatus: @Runtime.Current.TrapMessage</p>
-<button class="btn btn-outline-primary mb-3" @onclick="LoadAsync">Refresh</button>
+<section class="surface">
+    <div class="row g-3">
+        <div class="col-md-3">
+            <div class="muted-metadata">Receiver</div>
+            <span class="@StatusBadgeClass(Runtime.Current.TrapStatus.ToString())">@Runtime.Current.TrapStatus</span>
+        </div>
+        <div class="col-md-9">
+            <div class="muted-metadata">Message</div>
+            <div>@Runtime.Current.TrapMessage</div>
+        </div>
+    </div>
+</section>
 
-<table class="table table-sm">
-    <thead><tr><th>Received</th><th>Agent</th><th>Source</th><th>Trap OID</th><th>Payload</th></tr></thead>
-    <tbody>
-    @foreach (var item in traps)
-    {
-        <tr><td>@item.ReceivedAt.ToLocalTime()</td><td>@item.AgentId</td><td>@item.SourceAddress</td><td>@item.TrapOid</td><td><code>@item.VarbindsJson</code></td></tr>
-    }
-    </tbody>
-</table>
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+
+@if (lastLoaded is not null)
+{
+    <div class="muted-metadata mb-3">Snapshot refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
+}
+
+@if (isLoading)
+{
+    <div class="empty-state">Loading trap records...</div>
+}
+else if (traps.Count == 0)
+{
+    <div class="empty-state">No trap records have been received.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th class="numeric">Received</th>
+                    <th>Agent</th>
+                    <th>Source</th>
+                    <th>Trap OID</th>
+                    <th>Payload</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in traps)
+            {
+                <tr>
+                    <td class="numeric">@item.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                    <td>@item.AgentId</td>
+                    <td>@item.SourceAddress</td>
+                    <td><code>@item.TrapOid</code></td>
+                    <td class="code-cell"><code>@item.VarbindsJson</code></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
 
 @code {
     private IReadOnlyList<SnmpTrapLogEntry> traps = [];
+    private string? error;
+    private bool isLoading;
+    private DateTimeOffset? lastLoaded;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task LoadAsync()
     {
-        traps = await Logs.QueryRecentTrapsAsync();
+        try
+        {
+            isLoading = true;
+            error = null;
+            traps = await Logs.QueryRecentTrapsAsync();
+            lastLoaded = DateTimeOffset.Now;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private static string StatusBadgeClass(string? status)
+    {
+        var normalized = status?.ToLowerInvariant();
+        return normalized switch
+        {
+            "normal" or "good" => "status-badge success",
+            "starting" => "status-badge warning",
+            "degraded" or "bad" or "failed" or "error" => "status-badge danger",
+            _ => "status-badge neutral"
+        };
     }
 }

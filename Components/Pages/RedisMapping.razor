@@ -2,59 +2,207 @@
 @rendermode InteractiveServer
 @inject RedisMappingValidationService Validation
 
-<h1>RedisMapping</h1>
-
-<div class="row g-2 form-band">
-    <div class="col"><input class="form-control" placeholder="SourcePath" @bind="sourcePath" /></div>
-    <div class="col"><input class="form-control" placeholder="RedisKey point:*" @bind="redisKey" /></div>
-    <div class="col-auto"><button class="btn btn-primary" @onclick="SaveAsync">Save</button></div>
+<div class="page-header">
+    <div>
+        <h1>RedisMapping</h1>
+        <p class="page-kicker">Map SNMP source paths to Asset-owned Redis point keys.</p>
+    </div>
+    <button class="btn btn-primary" type="button" @onclick="() => OpenMappingDialog()">Add Mapping</button>
 </div>
 
 @if (!string.IsNullOrWhiteSpace(message))
 {
-    <div class="alert alert-info">@message</div>
+    <div class="@AlertClass">@message</div>
 }
 
-<table class="table table-sm">
-    <thead><tr><th>SourcePath</th><th>RedisKey</th><th></th></tr></thead>
-    <tbody>
-    @foreach (var item in mappings)
-    {
-        <tr>
-            <td>@item.SourcePath</td>
-            <td>@item.RedisKey</td>
-            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(item.Id)">Delete</button></td>
-        </tr>
-    }
-    </tbody>
-</table>
+<div class="toolbar">
+    <div>
+        <h2 class="toolbar-title">Mappings</h2>
+        <div class="muted-metadata">Only mapped and owned points are written to Redis runtime fields.</div>
+    </div>
+    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync">Refresh</button>
+</div>
+
+@if (isLoading)
+{
+    <div class="empty-state">Loading mappings...</div>
+}
+else if (mappings.Count == 0)
+{
+    <div class="empty-state">No Redis mappings are configured.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Source path</th>
+                    <th>Redis key</th>
+                    <th class="numeric">Updated</th>
+                    <th class="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in mappings)
+            {
+                <tr>
+                    <td><code>@item.SourcePath</code></td>
+                    <td><code>@item.RedisKey</code></td>
+                    <td class="numeric">@FormatDate(item.UpdatedAt)</td>
+                    <td class="actions">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenMappingDialog(item)">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenDeleteDialog(item)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (lastLoaded is not null)
+{
+    <div class="muted-metadata">Last refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
+}
+
+@if (mappingDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseMappingDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@((mappingId > 0) ? "Edit Mapping" : "Add Mapping")</h2>
+                <div class="muted-metadata">Source paths are validated against known SNMP points, health fields, or trap rules.</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseMappingDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="row g-3">
+                <div class="col-12">
+                    <label class="form-label">SourcePath</label>
+                    <input class="form-control" @bind="sourcePath" placeholder="snmp:agent1/1.3.6.1.2.1.1.3.0" />
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Redis key</label>
+                    <input class="form-control" @bind="redisKey" placeholder="point:site:snmp:sysUpTime" />
+                </div>
+            </div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseMappingDialog">Cancel</button>
+            <button class="btn btn-primary" type="button" @onclick="SaveAsync">Save</button>
+        </div>
+    </div>
+}
+
+@if (deleteMapping is not null)
+{
+    <div class="dialog-backdrop" @onclick="CloseDeleteDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <h2 class="m-0">Confirm Delete</h2>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseDeleteDialog"></button>
+        </div>
+        <div class="dialog-body">
+            Delete mapping from <code>@deleteMapping.SourcePath</code> to <code>@deleteMapping.RedisKey</code>?
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseDeleteDialog">Cancel</button>
+            <button class="btn btn-danger" type="button" @onclick="DeleteAsync">Delete</button>
+        </div>
+    </div>
+}
 
 @code {
     private List<Ptlk.RedisSnmp.Models.RedisMapping> mappings = [];
+    private Ptlk.RedisSnmp.Models.RedisMapping? deleteMapping;
+    private int? mappingId;
     private string sourcePath = "";
     private string redisKey = "";
     private string? message;
+    private bool messageIsError;
+    private bool mappingDialogOpen;
+    private bool isLoading;
+    private DateTimeOffset? lastLoaded;
+
+    private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
-    private async Task LoadAsync() => mappings = await Validation.ListAsync();
+    private async Task LoadAsync()
+    {
+        try
+        {
+            isLoading = true;
+            mappings = await Validation.ListAsync();
+            lastLoaded = DateTimeOffset.Now;
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void OpenMappingDialog(Ptlk.RedisSnmp.Models.RedisMapping? item = null)
+    {
+        mappingId = item?.Id;
+        sourcePath = item?.SourcePath ?? "";
+        redisKey = item?.RedisKey ?? "";
+        mappingDialogOpen = true;
+    }
+
+    private void CloseMappingDialog() => mappingDialogOpen = false;
 
     private async Task SaveAsync()
     {
         try
         {
-            await Validation.CreateOrUpdateAsync(null, sourcePath, redisKey);
-            sourcePath = "";
-            redisKey = "";
-            message = "Mapping saved.";
+            await Validation.CreateOrUpdateAsync(mappingId, sourcePath, redisKey);
+            mappingDialogOpen = false;
+            SetMessage("Mapping saved.");
             await LoadAsync();
         }
-        catch (Exception ex) { message = ex.Message; }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
     }
 
-    private async Task DeleteAsync(int id)
+    private void OpenDeleteDialog(Ptlk.RedisSnmp.Models.RedisMapping item) => deleteMapping = item;
+
+    private void CloseDeleteDialog() => deleteMapping = null;
+
+    private async Task DeleteAsync()
     {
-        await Validation.DeleteAsync(id);
-        await LoadAsync();
+        if (deleteMapping is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Validation.DeleteAsync(deleteMapping.Id);
+            CloseDeleteDialog();
+            SetMessage("Mapping deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
     }
+
+    private void SetMessage(string value, bool isError = false)
+    {
+        message = value;
+        messageIsError = isError;
+    }
+
+    private static string FormatDate(DateTime value) =>
+        value == default ? "-" : value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
 }

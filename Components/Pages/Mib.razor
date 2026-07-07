@@ -4,55 +4,145 @@
 @inject MibLookupService Lookup
 @inject MibExportService Exporter
 
-<h1>MIB</h1>
+<div class="page-header">
+    <div>
+        <h1>MIB</h1>
+        <p class="page-kicker">Optional metadata used for labels, lookup, and exported project MIB text.</p>
+    </div>
+    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+</div>
 
 <section class="form-band">
-    <div class="row g-2">
-        <div class="col"><input class="form-control" placeholder="Version name" @bind="versionName" /></div>
-        <div class="col-auto form-check form-switch">
-            <input class="form-check-input" type="checkbox" @bind="activate" />
-            <label class="form-check-label">Activate</label>
+    <div class="row g-3">
+        <div class="col-md-8">
+            <label class="form-label">Version name</label>
+            <input class="form-control" placeholder="default" @bind="versionName" />
         </div>
-        <div class="col-auto"><button class="btn btn-primary" @onclick="ImportAsync">Import Text</button></div>
+        <div class="col-md-4">
+            <div class="form-check form-switch mt-4">
+                <input class="form-check-input" id="activate-mib" type="checkbox" @bind="activate" />
+                <label class="form-check-label" for="activate-mib">Activate after import</label>
+            </div>
+        </div>
+        <div class="col-12">
+            <label class="form-label">MIB metadata CSV</label>
+            <textarea class="form-control" rows="8" @bind="mibText" placeholder="numeric_oid,symbolic_name,module,syntax,access,description"></textarea>
+            <div class="form-text">This import stores metadata only; Redis mapping still uses numeric source paths.</div>
+        </div>
     </div>
-    <textarea class="form-control mt-2" rows="8" @bind="mibText" placeholder="numeric_oid,symbolic_name,module,syntax,access,description"></textarea>
+    <div class="mt-3">
+        <button class="btn btn-primary" type="button" @onclick="ImportAsync" disabled="@isImporting">Import Text</button>
+    </div>
 </section>
 
 @if (!string.IsNullOrWhiteSpace(message))
 {
-    <div class="alert alert-info">@message</div>
+    <div class="@AlertClass">@message</div>
 }
 
-<h2>Active Nodes</h2>
-<table class="table table-sm">
-    <thead><tr><th>OID</th><th>Symbol</th><th>Syntax</th><th>Access</th></tr></thead>
-    <tbody>
-    @foreach (var node in nodes)
-    {
-        <tr><td>@node.NumericOid</td><td>@node.SymbolicName</td><td>@node.Syntax</td><td>@node.Access</td></tr>
-    }
-    </tbody>
-</table>
+<div class="toolbar">
+    <div>
+        <h2 class="toolbar-title">Active Nodes</h2>
+        <div class="muted-metadata">Rows shown here are a manual snapshot of active metadata.</div>
+    </div>
+</div>
+
+@if (lastLoaded is not null)
+{
+    <div class="muted-metadata mb-3">Snapshot refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
+}
+
+@if (isLoading)
+{
+    <div class="empty-state">Loading active MIB nodes...</div>
+}
+else if (nodes.Count == 0)
+{
+    <div class="empty-state">No active MIB nodes are available. Numeric OID polling and mapping can still be configured.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>OID</th>
+                    <th>Symbol</th>
+                    <th>Syntax</th>
+                    <th>Access</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var node in nodes)
+            {
+                <tr>
+                    <td><code>@node.NumericOid</code></td>
+                    <td>@(node.SymbolicName ?? "-")</td>
+                    <td>@(node.Syntax ?? "-")</td>
+                    <td><span class="status-badge neutral">@(node.Access ?? "-")</span></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
 
 @code {
     private string versionName = "default";
     private string mibText = "";
     private bool activate = true;
     private string? message;
+    private bool messageIsError;
+    private bool isLoading;
+    private bool isImporting;
+    private DateTimeOffset? lastLoaded;
     private IReadOnlyList<MibLookupResult> nodes = [];
+
+    private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task ImportAsync()
     {
-        var result = await Importer.ImportTextAsync(versionName, "ui-text.csv", mibText, activate);
-        message = result.Success ? $"Imported {result.NodeCount} node(s)." : string.Join("; ", result.Errors);
-        await LoadAsync();
+        try
+        {
+            isImporting = true;
+            var result = await Importer.ImportTextAsync(versionName, "ui-text.csv", mibText, activate);
+            SetMessage(result.Success ? $"Imported {result.NodeCount} node(s)." : string.Join("; ", result.Errors), !result.Success);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+        finally
+        {
+            isImporting = false;
+        }
     }
 
     private async Task LoadAsync()
     {
-        nodes = await Lookup.ListActiveAsync();
-        _ = await Exporter.ExportProjectMibAsync();
+        try
+        {
+            isLoading = true;
+            nodes = await Lookup.ListActiveAsync();
+            _ = await Exporter.ExportProjectMibAsync();
+            lastLoaded = DateTimeOffset.Now;
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void SetMessage(string value, bool isError = false)
+    {
+        message = value;
+        messageIsError = isError;
     }
 }

@@ -1,48 +1,82 @@
 @page "/"
 @rendermode InteractiveServer
+@implements IDisposable
 @inject RuntimeModeService Runtime
 
-<h1>Runtime</h1>
+<div class="page-header">
+    <div>
+        <h1>Runtime</h1>
+        <p class="page-kicker">Live subsystem state from the RedisSnmp runtime service.</p>
+    </div>
+    <div class="muted-metadata">Updated @state.UpdatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</div>
+</div>
 
 <section class="status-grid">
     <div class="status-tile">
         <div class="label">Mode</div>
-        <div class="value">@state.Mode</div>
+        <div class="value"><span class="@StatusBadgeClass(state.Mode.ToString())">@state.Mode</span></div>
+        <p>@state.Message</p>
     </div>
     <div class="status-tile">
         <div class="label">SNMP acquisition</div>
-        <div class="value">@state.AcquisitionStatus</div>
+        <div class="value"><span class="@StatusBadgeClass(state.AcquisitionStatus.ToString())">@state.AcquisitionStatus</span></div>
         <p>@state.AcquisitionMessage</p>
     </div>
     <div class="status-tile">
         <div class="label">Redis output</div>
-        <div class="value">@state.RedisOutputStatus</div>
+        <div class="value"><span class="@StatusBadgeClass(state.RedisOutputStatus.ToString())">@state.RedisOutputStatus</span></div>
         <p>@state.RedisOutputMessage</p>
     </div>
     <div class="status-tile">
-        <div class="label">Trap</div>
-        <div class="value">@state.TrapStatus</div>
+        <div class="label">Trap receiver</div>
+        <div class="value"><span class="@StatusBadgeClass(state.TrapStatus.ToString())">@state.TrapStatus</span></div>
         <p>@state.TrapMessage</p>
     </div>
     <div class="status-tile">
-        <div class="label">MIB</div>
-        <div class="value">@state.MibStatus</div>
+        <div class="label">MIB metadata</div>
+        <div class="value"><span class="@StatusBadgeClass(state.MibStatus.ToString())">@state.MibStatus</span></div>
         <p>@state.MibMessage</p>
     </div>
 </section>
 
-@if (state.RedisOutputDiagnostics.Count > 0)
+<div class="toolbar">
+    <div>
+        <h2 class="toolbar-title">Redis Output Diagnostics</h2>
+        <div class="muted-metadata">Diagnostics are emitted when mapped Redis point writes cannot be completed.</div>
+    </div>
+</div>
+
+@if (state.RedisOutputDiagnostics.Count == 0)
 {
-    <h2>Redis Output Diagnostics</h2>
-    <table class="table table-sm">
-        <thead><tr><th>Source</th><th>Redis key</th><th>Status</th><th>Message</th></tr></thead>
-        <tbody>
-        @foreach (var item in state.RedisOutputDiagnostics)
-        {
-            <tr><td>@item.SourcePath</td><td>@item.RedisKey</td><td>@item.Status</td><td>@item.Message</td></tr>
-        }
-        </tbody>
-    </table>
+    <div class="empty-state">No Redis output diagnostics are currently reported.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Source</th>
+                    <th>Redis key</th>
+                    <th>Status</th>
+                    <th>Message</th>
+                    <th class="numeric">Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in state.RedisOutputDiagnostics)
+            {
+                <tr>
+                    <td><code>@item.SourcePath</code></td>
+                    <td><code>@item.RedisKey</code></td>
+                    <td><span class="@StatusBadgeClass(item.Status)">@item.Status</span></td>
+                    <td>@item.Message</td>
+                    <td class="numeric">@item.UpdatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
 }
 
 @code {
@@ -63,5 +97,17 @@
     public void Dispose()
     {
         Runtime.Changed -= OnRuntimeChanged;
+    }
+
+    private static string StatusBadgeClass(string? status)
+    {
+        var normalized = status?.ToLowerInvariant();
+        return normalized switch
+        {
+            "normal" or "good" or "success" or "online" => "status-badge success",
+            "starting" or "unset" or "heartbeat" => "status-badge warning",
+            "degraded" or "bad" or "failed" or "error" or "stale" or "offline" => "status-badge danger",
+            _ => "status-badge neutral"
+        };
     }
 }
