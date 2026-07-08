@@ -14,9 +14,8 @@ public sealed class SnmpPointService(
         db.SnmpPointConfigs
             .AsNoTracking()
             .Include(p => p.AgentConfig)
-            .Include(p => p.MibSetUsedForMapping)
             .OrderBy(p => p.AgentConfig!.AgentId)
-            .ThenBy(p => p.PointName)
+            .ThenBy(p => p.NumericOid)
             .ToListAsync(cancellationToken);
 
     public async Task<SnmpPointConfig> CreateOrUpdateAsync(
@@ -33,13 +32,11 @@ public sealed class SnmpPointService(
             : new SnmpPointConfig();
 
         entity.AgentConfigId = agent.Id;
-        entity.PointName = input.PointName.Trim();
         entity.NumericOid = numericOid;
         entity.SourcePath = sourcePath;
         entity.ValueType = input.ValueType.Trim();
         entity.Access = input.Access.Trim();
         entity.Description = NullIfWhiteSpace(input.Description);
-        entity.MibSetIdUsedForMapping = input.MibSetIdUsedForMapping;
         entity.MibLabel = NullIfWhiteSpace(input.MibLabel);
         entity.MibModule = NullIfWhiteSpace(input.MibModule);
         entity.MibSyntax = NullIfWhiteSpace(input.MibSyntax);
@@ -73,11 +70,6 @@ public sealed class SnmpPointService(
         {
             throw new InvalidOperationException("Agent is required.");
         }
-        if (string.IsNullOrWhiteSpace(point.PointName))
-        {
-            throw new InvalidOperationException("PointName is required.");
-        }
-
         _ = paths.NormalizeNumericOid(point.NumericOid);
 
         if (point.ValueType is not SnmpValueTypes.String

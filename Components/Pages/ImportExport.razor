@@ -1,0 +1,178 @@
+@page "/import-export"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject ZipConfigService ZipConfig
+@inject Microsoft.Extensions.Options.IOptions<Ptlk.RedisSnmp.Configuration.ImportExportOptions> Limits
+@inject IJSRuntime JS
+@inject ScreenAlertService ScreenAlerts
+
+<div class="page-header">
+    <div>
+        <h1>Import / Export</h1>
+        <p class="page-kicker">Configuration bundle backup and restore.</p>
+    </div>
+    <button class="btn btn-primary" type="button" @onclick="ExportZipAsync" disabled="@exporting">
+        @(exporting ? "Exporting..." : "Export ZIP")
+    </button>
+</div>
+
+<ScreenAlertHost />
+
+<div class="import-export-grid">
+    <section class="surface">
+        <div class="toolbar mt-0">
+            <div>
+                <h2 class="toolbar-title">Export</h2>
+                <div class="muted-metadata">ZIP includes configuration CSV and uploaded MIB files.</div>
+            </div>
+        </div>
+        <dl class="import-export-facts">
+            <div>
+                <dt>Format</dt>
+                <dd>ZIP</dd>
+            </div>
+            <div>
+                <dt>Limit</dt>
+                <dd>@FormatBytes(Limits.Value.ZipFileLimitBytes)</dd>
+            </div>
+        </dl>
+    </section>
+
+    <section class="surface">
+        <div class="toolbar mt-0">
+            <div>
+                <h2 class="toolbar-title">Import</h2>
+                <div class="muted-metadata">Existing records are merged by their stable keys.</div>
+            </div>
+        </div>
+        <InputFile class="form-control" OnChange="OnImportFileSelected" accept=".zip,application/zip" />
+        @if (selectedFile is not null)
+        {
+            <div class="muted-metadata mt-2">@selectedFile.Name (@FormatBytes(selectedFile.Size))</div>
+        }
+        <div class="page-actions mt-3">
+            <button class="btn btn-primary" type="button" @onclick="ImportZipAsync" disabled="@(selectedFile is null || importing)">
+                @(importing ? "Importing..." : "Import ZIP")
+            </button>
+        </div>
+
+        @if (importErrors.Count > 0)
+        {
+            <div class="alert alert-danger mt-3">
+                <div class="fw-bold">Import failed</div>
+                <ul class="compact-list">
+                    @foreach (var error in importErrors.Take(8))
+                    {
+                        <li>@error</li>
+                    }
+                </ul>
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(importSummary))
+        {
+            <div class="alert alert-success mt-3">@importSummary</div>
+        }
+    </section>
+</div>
+
+@code {
+    private IJSObjectReference? jsModule;
+    private IBrowserFile? selectedFile;
+    private bool exporting;
+    private bool importing;
+    private string? importSummary;
+    private List<string> importErrors = [];
+
+    private void OnImportFileSelected(InputFileChangeEventArgs args)
+    {
+        selectedFile = args.File;
+        importSummary = null;
+        importErrors = [];
+    }
+
+    private async Task ExportZipAsync()
+    {
+        try
+        {
+            exporting = true;
+            await using var stream = await ZipConfig.ExportAsync();
+            using var streamRef = new DotNetStreamReference(stream);
+            var module = await GetJsModuleAsync();
+            var fileName = $"redis-snmp-config-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.zip";
+            await module.InvokeVoidAsync("downloadFileFromStream", fileName, "application/zip", streamRef);
+            await ScreenAlerts.ShowAsync("Configuration ZIP exported.", ScreenAlertSeverity.Success, "Import / Export");
+        }
+        catch (Exception ex)
+        {
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Export failed");
+        }
+        finally
+        {
+            exporting = false;
+        }
+    }
+
+    private async Task ImportZipAsync()
+    {
+        if (selectedFile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            importing = true;
+            importSummary = null;
+            importErrors = [];
+            await using var stream = selectedFile.OpenReadStream(Limits.Value.ZipFileLimitBytes);
+            var result = await ZipConfig.ImportAsync(stream);
+            if (result.Errors.Count > 0)
+            {
+                importErrors = result.Errors.ToList();
+                await ScreenAlerts.ShowAsync("Configuration import failed.", ScreenAlertSeverity.Error, "Import failed");
+                return;
+            }
+
+            selectedFile = null;
+            importSummary = $"Imported {result.ImportedRows} item(s).";
+            await ScreenAlerts.ShowAsync(importSummary, ScreenAlertSeverity.Success, "Import / Export");
+        }
+        catch (Exception ex)
+        {
+            importErrors = [ex.Message];
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Import failed");
+        }
+        finally
+        {
+            importing = false;
+        }
+    }
+
+    private async Task<IJSObjectReference> GetJsModuleAsync()
+    {
+        jsModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/importExportInterop.js");
+        return jsModule;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        double value = bytes;
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return $"{value:0.#} {units[unit]}";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (jsModule is not null)
+        {
+            await jsModule.DisposeAsync();
+        }
+    }
+}

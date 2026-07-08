@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using Ptlk.RedisSnmp.Configuration;
+using Ptlk.RedisSnmp.Services.Autocomplete;
 using StackExchange.Redis;
-using System.Text;
 
 namespace Ptlk.RedisSnmp.Services.Redis;
 
@@ -11,42 +11,73 @@ public sealed class RedisKeySuggestionService(
     RedisConnectionFactory redis,
     IOptions<RedisOptions> options)
 {
-    public async Task<IReadOnlyList<RedisKeySuggestion>> SearchPointKeysAsync(
+    public async Task<SuggestionPage<RedisKeySuggestion>> SearchPointKeysAsync(
         string query,
         int limit = 24,
+        long cursor = 0,
+        int pageOffset = 0,
         CancellationToken cancellationToken = default)
     {
         var normalizedQuery = query.Trim();
         if (string.IsNullOrWhiteSpace(normalizedQuery))
         {
-            return [];
+            return new SuggestionPage<RedisKeySuggestion>([], false);
         }
 
         var boundedLimit = Math.Clamp(limit, 1, 100);
+        var boundedCursor = Math.Max(cursor, 0L);
+        var boundedPageOffset = Math.Max(pageOffset, 0);
         var connection = await redis.GetConnectionAsync(cancellationToken);
         var server = GetServer(connection);
         var databaseIndex = options.Value.DatabaseIndex;
-        var pattern = BuildPointKeyPattern(normalizedQuery);
+        var filter = BuildPointKeyFilter(normalizedQuery);
         var suggestions = new List<RedisKeySuggestion>(boundedLimit);
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var nextCursor = boundedCursor;
+        var nextPageOffset = boundedPageOffset;
+        var hasMore = false;
 
-        foreach (var key in server.Keys(databaseIndex, pattern, pageSize: boundedLimit))
+        var keys = server.Keys(
+            databaseIndex,
+            "point:*",
+            pageSize: Math.Max(boundedLimit * 4, 100),
+            cursor: boundedCursor,
+            pageOffset: boundedPageOffset);
+        using var enumerator = keys.GetEnumerator();
+        var scanningCursor = enumerator as IScanningCursor ?? keys as IScanningCursor;
+
+        while (suggestions.Count < boundedLimit && enumerator.MoveNext())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var keyText = key.ToString();
-            if (keyText.StartsWith("point:", StringComparison.OrdinalIgnoreCase))
+            var keyText = enumerator.Current.ToString();
+            if (scanningCursor is not null)
+            {
+                nextCursor = scanningCursor.Cursor;
+                nextPageOffset = scanningCursor.PageOffset;
+            }
+
+            if (keyText.StartsWith("point:", StringComparison.OrdinalIgnoreCase)
+                && MatchesFilter(keyText, filter)
+                && seenKeys.Add(keyText))
             {
                 suggestions.Add(new RedisKeySuggestion(keyText));
             }
-
-            if (suggestions.Count >= boundedLimit)
-            {
-                break;
-            }
         }
 
-        return suggestions
+        if (scanningCursor is not null)
+        {
+            hasMore = nextCursor != 0 || nextPageOffset != 0;
+        }
+
+        var items = suggestions
             .OrderBy(suggestion => suggestion.RedisKey, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        return new SuggestionPage<RedisKeySuggestion>(
+            items,
+            hasMore,
+            NextCursor: nextCursor,
+            NextPageOffset: nextPageOffset);
     }
 
     private static IServer GetServer(IConnectionMultiplexer connection)
@@ -63,33 +94,16 @@ public sealed class RedisKeySuggestionService(
         throw new InvalidOperationException("No connected Redis server is available for key suggestions.");
     }
 
-    private static RedisValue BuildPointKeyPattern(string query)
+    private static string BuildPointKeyFilter(string query)
     {
         var tail = query.StartsWith("point:", StringComparison.OrdinalIgnoreCase)
             ? query["point:".Length..]
             : query;
 
-        if (string.IsNullOrWhiteSpace(tail))
-        {
-            return "point:*";
-        }
-
-        return $"point:*{EscapeRedisPattern(tail)}*";
+        return tail.Trim();
     }
 
-    private static string EscapeRedisPattern(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-        foreach (var character in value)
-        {
-            if (character is '*' or '?' or '[' or ']' or '\\')
-            {
-                builder.Append('\\');
-            }
-
-            builder.Append(character);
-        }
-
-        return builder.ToString();
-    }
+    private static bool MatchesFilter(string key, string filter) =>
+        string.IsNullOrWhiteSpace(filter)
+        || key["point:".Length..].Contains(filter, StringComparison.OrdinalIgnoreCase);
 }

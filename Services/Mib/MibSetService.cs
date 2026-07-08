@@ -99,13 +99,6 @@ public sealed class MibSetService(
             .Select(g => new { MibSetId = g.Key, Count = g.Count() })
             .ToDictionaryAsync(g => g.MibSetId, g => g.Count, cancellationToken);
 
-        var pointReferences = await db.SnmpPointConfigs
-            .AsNoTracking()
-            .Where(p => p.MibSetIdUsedForMapping != null)
-            .GroupBy(p => p.MibSetIdUsedForMapping!.Value)
-            .Select(g => new { MibSetId = g.Key, Count = g.Count() })
-            .ToDictionaryAsync(g => g.MibSetId, g => g.Count, cancellationToken);
-
         return sets.Select(s => new MibSetSummary(
                 s.Id,
                 s.Name,
@@ -116,7 +109,6 @@ public sealed class MibSetService(
                 s.IssueCount,
                 s.ErrorCount,
                 agentReferences.GetValueOrDefault(s.Id),
-                pointReferences.GetValueOrDefault(s.Id),
                 s.UpdatedAt))
             .ToList();
     }
@@ -265,14 +257,6 @@ public sealed class MibSetService(
             .Select(a => new { a.AgentId, a.DisplayName })
             .ToListAsync(cancellationToken);
         references.AddRange(agents.Select(a => new MibSetReference("agent", a.AgentId, a.DisplayName)));
-
-        var points = await db.SnmpPointConfigs.AsNoTracking()
-            .Include(p => p.AgentConfig)
-            .Where(p => p.MibSetIdUsedForMapping == mibSetId)
-            .OrderBy(p => p.SourcePath)
-            .Select(p => new { p.PointName, p.SourcePath, AgentId = p.AgentConfig == null ? "" : p.AgentConfig.AgentId })
-            .ToListAsync(cancellationToken);
-        references.AddRange(points.Select(p => new MibSetReference("point", p.PointName, $"{p.AgentId} / {p.SourcePath}")));
 
         return references;
     }

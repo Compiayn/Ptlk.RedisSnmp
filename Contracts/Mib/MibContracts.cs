@@ -32,7 +32,6 @@ public sealed record MibSetSummary(
     int IssueCount,
     int ErrorCount,
     int AgentReferenceCount,
-    int PointReferenceCount,
     DateTime UpdatedAt);
 
 public sealed record MibSetOption(int Id, string Name, string Status);

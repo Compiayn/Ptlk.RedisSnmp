@@ -9,7 +9,7 @@ namespace Ptlk.RedisSnmp.Services.Browser;
 
 public sealed record BrowserPointSnapshot(
     string AgentId,
-    string PointName,
+    string DisplayName,
     string SourcePath,
     string NumericOid,
     string Access,
@@ -34,7 +34,7 @@ public sealed class BrowserSnapshotService(
             .AsNoTracking()
             .Include(point => point.AgentConfig)
             .OrderBy(point => point.AgentConfig!.AgentId)
-            .ThenBy(point => point.PointName)
+            .ThenBy(point => point.NumericOid)
             .ToListAsync(cancellationToken);
         var mappings = await db.RedisMappings.AsNoTracking().ToDictionaryAsync(m => m.SourcePath, m => m, StringComparer.OrdinalIgnoreCase, cancellationToken);
         var claims = ownership.Snapshot().ToDictionary(c => c.SourcePath, c => c, StringComparer.OrdinalIgnoreCase);
@@ -56,7 +56,7 @@ public sealed class BrowserSnapshotService(
 
         return new BrowserPointSnapshot(
             point.AgentConfig?.AgentId ?? "-",
-            point.PointName,
+            DisplayPoint(point),
             point.SourcePath,
             point.NumericOid,
             point.Access,
@@ -69,6 +69,11 @@ public sealed class BrowserSnapshotService(
             claim?.Status,
             redis);
     }
+
+    private static string DisplayPoint(SnmpPointConfig point) =>
+        !string.IsNullOrWhiteSpace(point.MibLabel)
+            ? point.MibLabel
+            : point.NumericOid;
 
     private async Task<PointStateContract?> ReadRedisStateAsync(string? redisKey, CancellationToken cancellationToken)
     {

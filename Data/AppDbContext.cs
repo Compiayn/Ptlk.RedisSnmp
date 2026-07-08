@@ -78,9 +78,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
         modelBuilder.Entity<SnmpPointConfig>(entity =>
         {
-            entity.HasIndex(p => new { p.AgentConfigId, p.PointName }).IsUnique();
             entity.HasIndex(p => p.SourcePath).IsUnique();
-            entity.Property(p => p.PointName).HasMaxLength(160).IsRequired();
             entity.Property(p => p.SourcePath).HasMaxLength(320).IsRequired();
             entity.Property(p => p.NumericOid).HasMaxLength(160).IsRequired();
             entity.Property(p => p.ValueType).HasMaxLength(32).IsRequired();
@@ -91,10 +89,6 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(p => p.MibAccess).HasMaxLength(40);
             entity.Property(p => p.MibLabel).HasMaxLength(240);
             entity.Property(p => p.MibDescription).HasMaxLength(4000);
-            entity.HasOne(p => p.MibSetUsedForMapping)
-                  .WithMany()
-                  .HasForeignKey(p => p.MibSetIdUsedForMapping)
-                  .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<RedisMapping>(entity =>

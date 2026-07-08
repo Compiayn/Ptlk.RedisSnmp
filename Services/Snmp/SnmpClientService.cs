@@ -250,7 +250,7 @@ public sealed class SnmpClientService(
         var requestTimeoutMs = RequestTimeoutMs(agent);
         var configuredTimeoutMs = runtimeOptions.Value.DefaultWalkTimeoutMs > 0
             ? runtimeOptions.Value.DefaultWalkTimeoutMs
-            : Math.Max(60000, requestTimeoutMs * 12);
+            : requestTimeoutMs;
         var operationTimeoutMs = requestedTimeoutMs.GetValueOrDefault(configuredTimeoutMs);
         return Math.Max(operationTimeoutMs, requestTimeoutMs);
     }

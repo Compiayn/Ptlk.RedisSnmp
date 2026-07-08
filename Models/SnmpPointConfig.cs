@@ -5,14 +5,11 @@ public sealed class SnmpPointConfig
     public int Id { get; set; }
     public int AgentConfigId { get; set; }
     public SnmpAgentConfig? AgentConfig { get; set; }
-    public string PointName { get; set; } = "";
     public string SourcePath { get; set; } = "";
     public string NumericOid { get; set; } = "";
     public string ValueType { get; set; } = "string";
     public string Access { get; set; } = "ro";
     public string? Description { get; set; }
-    public int? MibSetIdUsedForMapping { get; set; }
-    public MibSet? MibSetUsedForMapping { get; set; }
     public string? MibLabel { get; set; }
     public string? MibModule { get; set; }
     public string? MibSyntax { get; set; }

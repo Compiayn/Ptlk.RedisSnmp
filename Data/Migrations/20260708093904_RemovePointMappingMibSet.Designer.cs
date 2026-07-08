@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Ptlk.RedisSnmp.Data;
 
@@ -10,9 +11,11 @@ using Ptlk.RedisSnmp.Data;
 namespace Ptlk.RedisSnmp.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260708093904_RemovePointMappingMibSet")]
+    partial class RemovePointMappingMibSet
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.7");
@@ -761,6 +764,12 @@ namespace Ptlk.RedisSnmp.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("numeric_oid");
 
+                    b.Property<string>("PointName")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("point_name");
+
                     b.Property<string>("SourcePath")
                         .IsRequired()
                         .HasMaxLength(320)
@@ -780,12 +789,13 @@ namespace Ptlk.RedisSnmp.Data.Migrations
                     b.HasKey("Id")
                         .HasName("pk_snmp_point_configs");
 
-                    b.HasIndex("AgentConfigId")
-                        .HasDatabaseName("ix_snmp_point_configs_agent_config_id");
-
                     b.HasIndex("SourcePath")
                         .IsUnique()
                         .HasDatabaseName("ix_snmp_point_configs_source_path");
+
+                    b.HasIndex("AgentConfigId", "PointName")
+                        .IsUnique()
+                        .HasDatabaseName("ix_snmp_point_configs_agent_config_id_point_name");
 
                     b.ToTable("snmp_point_configs", (string)null);
                 });

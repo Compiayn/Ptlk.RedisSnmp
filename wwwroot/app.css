@@ -431,6 +431,31 @@ fieldset:disabled .btn:active {
     font-size: 0.9rem;
 }
 
+.sourcepath-suggestion-load-more {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    padding: 0.65rem 0.75rem;
+    border: 0;
+    border-top: 1px solid #eef2f5;
+    background: #f8fafc;
+    color: #155d87;
+    font-weight: 700;
+    text-align: center;
+}
+
+.sourcepath-suggestion-load-more:hover,
+.sourcepath-suggestion-load-more:focus-visible {
+    background: #eef6fb;
+    outline: 0;
+}
+
+.sourcepath-suggestion-load-more:disabled {
+    color: #7b8794;
+    cursor: progress;
+}
+
 .sourcepath-match {
     padding: 0 0.05rem;
     border-radius: 2px;
@@ -631,6 +656,45 @@ fieldset:disabled .btn:active {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: 1rem;
+}
+
+.import-export-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.import-export-facts {
+    display: grid;
+    gap: 0.65rem;
+    margin: 0;
+}
+
+.import-export-facts div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid #eef2f5;
+}
+
+.import-export-facts div:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.import-export-facts dt {
+    color: #56616f;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.import-export-facts dd {
+    margin: 0;
+    color: #1f2933;
+    font-weight: 700;
 }
 
 .point-candidate-table {

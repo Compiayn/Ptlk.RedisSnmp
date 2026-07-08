@@ -1,12 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Ptlk.RedisSnmp.Data;
+using Ptlk.RedisSnmp.Services.Autocomplete;
 using System.Text;
 
 namespace Ptlk.RedisSnmp.Services.Paths;
 
 public sealed record SourcePathSuggestion(
     string SourcePath,
-    string PointName,
     string? MibLabel,
     string NumericOid,
     string? MibModule,
@@ -15,38 +15,47 @@ public sealed record SourcePathSuggestion(
 
 public sealed class PathSuggestionService(AppDbContext db)
 {
-    public async Task<IReadOnlyList<SourcePathSuggestion>> SearchSnmpPointSuggestionsAsync(
+    public async Task<SuggestionPage<SourcePathSuggestion>> SearchSnmpPointSuggestionsAsync(
         string query,
         int limit = 24,
+        int offset = 0,
         CancellationToken cancellationToken = default)
     {
         var normalizedQuery = query.Trim();
         if (string.IsNullOrWhiteSpace(normalizedQuery))
         {
-            return [];
+            return new SuggestionPage<SourcePathSuggestion>([], false);
         }
 
         var boundedLimit = Math.Clamp(limit, 1, 100);
-        var pattern = $"%{EscapeLikePattern(normalizedQuery)}%";
+        var boundedOffset = Math.Max(offset, 0);
+        var searchSourcePath = normalizedQuery.StartsWith("snmp:", StringComparison.OrdinalIgnoreCase);
+        var normalizedQueryLower = normalizedQuery.ToLowerInvariant();
+        var pattern = $"%{EscapeLikePattern(normalizedQueryLower)}%";
 
-        return await db.SnmpPointConfigs
+        var results = await db.SnmpPointConfigs
             .AsNoTracking()
             .Where(point =>
-                EF.Functions.Like(point.PointName, pattern, "\\")
-                || (point.MibLabel != null && EF.Functions.Like(point.MibLabel, pattern, "\\")))
-            .OrderBy(point => point.MibLabel ?? point.PointName)
-            .ThenBy(point => point.PointName)
+                (searchSourcePath && EF.Functions.Like(point.SourcePath.ToLower(), pattern, "\\"))
+                || (point.MibLabel != null && EF.Functions.Like(point.MibLabel.ToLower(), pattern, "\\")))
+            .OrderBy(point => point.MibLabel ?? point.NumericOid)
             .ThenBy(point => point.SourcePath)
+            .Skip(boundedOffset)
             .Select(point => new SourcePathSuggestion(
                 point.SourcePath,
-                point.PointName,
                 point.MibLabel,
                 point.NumericOid,
                 point.MibModule,
                 point.MibSyntax,
                 point.MibAccess))
-            .Take(boundedLimit)
+            .Take(boundedLimit + 1)
             .ToListAsync(cancellationToken);
+
+        var items = results.Take(boundedLimit).ToList();
+        return new SuggestionPage<SourcePathSuggestion>(
+            items,
+            results.Count > boundedLimit,
+            boundedOffset + items.Count);
     }
 
     public async Task<IReadOnlyList<string>> ListSourcePathsAsync(CancellationToken cancellationToken = default)

@@ -312,10 +312,6 @@ else
                     </select>
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Point name</label>
-                    <input class="form-control" @bind="point.PointName" />
-                </div>
-                <div class="col-md-4">
                     <label class="form-label">Numeric OID</label>
                     <input class="form-control" @bind="point.NumericOid" />
                 </div>
@@ -336,16 +332,6 @@ else
                         <option value="@SnmpAccessModes.ReadOnly">ro</option>
                         <option value="@SnmpAccessModes.ReadWrite">rw</option>
                         <option value="@SnmpAccessModes.WriteOnly">wo</option>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Mapping MIB Set</label>
-                    <select class="form-select" @bind="point.MibSetIdUsedForMapping">
-                        <option value="">Numeric OID only</option>
-                        @foreach (var item in mibSetOptions)
-                        {
-                            <option value="@item.Id">@item.Name (@item.Status)</option>
-                        }
                     </select>
                 </div>
                 <div class="col-md-4">
@@ -540,13 +526,12 @@ else
                             {
                                 <tr class='@(pointDialogOpen && point.Id == item.Id ? "selected-row" : null)'>
                                     <td>
-                                        <div>@item.PointName</div>
+                                        <div>@DisplayPointIdentity(item)</div>
                                         <small>@item.SourcePath</small>
                                     </td>
                                     <td><code>@item.NumericOid</code></td>
                                     <td>
                                         <div>@(item.MibLabel ?? "-")</div>
-                                        <small>@MibSetName(item.MibSetIdUsedForMapping)</small>
                                     </td>
                                     <td>@item.ValueType</td>
                                     <td><span class="status-badge neutral">@item.Access</span></td>
@@ -623,7 +608,6 @@ else
                                     <th>Syntax</th>
                                     <th>Access</th>
                                     <th>Current value</th>
-                                    <th>Point name</th>
                                     <th>Status</th>
                                 </tr>
                             </thead>
@@ -640,7 +624,6 @@ else
                                     <td>@(candidate.Syntax ?? "-")</td>
                                     <td><span class="status-badge neutral">@candidate.Access</span></td>
                                     <td class="code-cell">@candidate.CurrentValue</td>
-                                    <td><input class="form-control form-control-sm" @bind="candidate.PointName" disabled="@candidate.Exists" /></td>
                                     <td><span class="@StatusBadgeClass(candidate.Exists ? "disabled" : "normal")">@candidate.Status</span></td>
                                 </tr>
                             }
@@ -681,6 +664,7 @@ else
 @code {
     private const string PointManagerPointsTab = "points";
     private const string PointManagerBuildTab = "build";
+    private const int DefaultWalkOperationTimeoutMs = 5000;
 
     private List<SnmpCredentialConfig> credentials = [];
     private List<SnmpAgentConfig> agents = [];
@@ -707,7 +691,7 @@ else
     private string deleteName = "";
     private SnmpAgentConfig? walkAgent;
     private string walkRootOid = "1.3.6.1.2.1";
-    private int walkOperationTimeoutMs = 60000;
+    private int walkOperationTimeoutMs = DefaultWalkOperationTimeoutMs;
     private int? walkSelectedMibSetId;
     private string? walkError;
     private SnmpWalkResult? walkResult;
@@ -718,7 +702,7 @@ else
     private SnmpAgentConfig? generateAgent;
     private int? generateSelectedMibSetId;
     private string generateRootOid = "1.3.6.1.2.1";
-    private int generateOperationTimeoutMs = 60000;
+    private int generateOperationTimeoutMs = DefaultWalkOperationTimeoutMs;
     private bool generateReadableOnly = true;
     private string? generateError;
     private List<PointCandidate> pointCandidates = [];
@@ -787,7 +771,7 @@ else
     {
         walkAgent = item;
         walkRootOid = "1.3.6.1.2.1";
-        walkOperationTimeoutMs = Math.Max(60000, item.TimeoutMs * 12);
+        walkOperationTimeoutMs = DefaultWalkOperationTimeoutMs;
         walkSelectedMibSetId = item.PreferredMibSetId;
         walkError = null;
         walkResult = null;
@@ -812,7 +796,7 @@ else
         generateAgent = item;
         generateSelectedMibSetId = item.PreferredMibSetId;
         generateRootOid = "1.3.6.1.2.1";
-        generateOperationTimeoutMs = Math.Max(60000, item.TimeoutMs * 12);
+        generateOperationTimeoutMs = DefaultWalkOperationTimeoutMs;
         generateReadableOnly = true;
         generateError = null;
         pointCandidates = [];
@@ -981,12 +965,10 @@ else
                 await Points.CreateOrUpdateAsync(new SnmpPointConfig
                 {
                     AgentConfigId = generateAgent.Id,
-                    PointName = candidate.PointName,
                     NumericOid = candidate.NumericOid,
                     ValueType = candidate.ValueType,
                     Access = candidate.Access,
                     Description = candidate.Description,
-                    MibSetIdUsedForMapping = generateSelectedMibSetId,
                     MibLabel = candidate.Label,
                     MibModule = candidate.Module,
                     MibSyntax = candidate.Syntax,
@@ -1027,10 +1009,6 @@ else
         IReadOnlyDictionary<string, MibLookupResult> lookupByOid)
     {
         var existingSourcePaths = points.Select(p => p.SourcePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var usedNames = points
-            .Where(p => p.AgentConfigId == sourceAgent.Id)
-            .Select(p => p.PointName)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var candidates = new List<PointCandidate>();
 
         foreach (var item in items.OrderBy(i => i.Oid, OidPathComparer.Instance))
@@ -1045,7 +1023,6 @@ else
 
             var sourcePath = Paths.BuildPointSourcePath(sourceAgent.AgentId, numericOid);
             var exists = existingSourcePaths.Contains(sourcePath);
-            var suggestedName = MakeUniquePointName(MakePointName(lookup?.SymbolicName, numericOid), usedNames);
             candidates.Add(new PointCandidate
             {
                 Selected = !exists,
@@ -1057,7 +1034,6 @@ else
                 MibAccess = lookup?.Access,
                 Access = access,
                 CurrentValue = item.Value ?? "",
-                PointName = suggestedName,
                 ValueType = InferValueType(lookup?.Syntax ?? item.Syntax),
                 Description = lookup?.Description,
                 Status = exists ? "existing" : "new"
@@ -1133,7 +1109,7 @@ else
         OpenDeleteDialog("agent", item.Id, item.AgentId);
 
     private void OpenPointDeleteDialog(SnmpPointConfig item) =>
-        OpenDeleteDialog("point", item.Id, item.PointName);
+        OpenDeleteDialog("point", item.Id, DisplayPointIdentity(item));
 
     private void OpenDeleteDialog(string kind, int id, string name)
     {
@@ -1251,13 +1227,11 @@ else
         {
             Id = source.Id,
             AgentConfigId = source.AgentConfigId,
-            PointName = source.PointName,
             SourcePath = source.SourcePath,
             NumericOid = source.NumericOid,
             ValueType = source.ValueType,
             Access = source.Access,
             Description = source.Description,
-            MibSetIdUsedForMapping = source.MibSetIdUsedForMapping,
             MibLabel = source.MibLabel,
             MibModule = source.MibModule,
             MibSyntax = source.MibSyntax,
@@ -1327,33 +1301,10 @@ else
         return SnmpValueTypes.String;
     }
 
-    private static string MakePointName(string? label, string numericOid)
-    {
-        var source = string.IsNullOrWhiteSpace(label)
-            ? "oid_" + numericOid.Replace(".", "_", StringComparison.Ordinal)
-            : label;
-        var builder = new System.Text.StringBuilder();
-        foreach (var ch in source)
-        {
-            builder.Append(char.IsLetterOrDigit(ch) || ch is '_' or '-' ? ch : '_');
-        }
-
-        var value = builder.ToString().Trim('_');
-        return string.IsNullOrWhiteSpace(value) ? "snmp_point" : value;
-    }
-
-    private static string MakeUniquePointName(string baseName, HashSet<string> usedNames)
-    {
-        var candidate = baseName;
-        var suffix = 2;
-        while (!usedNames.Add(candidate))
-        {
-            candidate = $"{baseName}_{suffix}";
-            suffix++;
-        }
-
-        return candidate;
-    }
+    private static string DisplayPointIdentity(SnmpPointConfig item) =>
+        !string.IsNullOrWhiteSpace(item.MibLabel)
+            ? item.MibLabel
+            : item.NumericOid;
 
     private static string StatusBadgeClass(string? status)
     {
@@ -1561,7 +1512,6 @@ else
         public string Access { get; set; } = SnmpAccessModes.ReadOnly;
         public string? MibAccess { get; set; }
         public string CurrentValue { get; set; } = "";
-        public string PointName { get; set; } = "";
         public string ValueType { get; set; } = SnmpValueTypes.String;
         public string? Description { get; set; }
         public string Status { get; set; } = "new";

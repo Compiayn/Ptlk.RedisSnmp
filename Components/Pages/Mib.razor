@@ -62,7 +62,7 @@ else
                     <td class="numeric">
                         <span class="@IssueBadgeClass(item.ErrorCount)">@item.IssueCount</span>
                     </td>
-                    <td class="numeric">@(item.AgentReferenceCount + item.PointReferenceCount)</td>
+                    <td class="numeric">@item.AgentReferenceCount</td>
                     <td class="numeric">@FormatDate(item.UpdatedAt)</td>
                     <td class="actions">
                         <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => SelectSetAsync(item.Id)">Select</button>
@@ -374,7 +374,7 @@ else
         </div>
         <div class="dialog-body">
             <p>Delete this MIB set and its files, validation issues, and node snapshot?</p>
-            <div class="muted-metadata">Referenced sets are protected and will show the blocking agent or point references.</div>
+            <div class="muted-metadata">Referenced sets are protected and will show the blocking agent references.</div>
         </div>
         <div class="dialog-footer">
             <button class="btn btn-outline-secondary" type="button" @onclick="CloseSetDeleteDialog">Cancel</button>
@@ -396,7 +396,7 @@ else
         </div>
         <div class="dialog-body">
             <div class="alert alert-warning">
-                This MIB set is referenced by @setDeleteReferences.Count agent or point item(s), so it was not deleted.
+                This MIB set is referenced by @setDeleteReferences.Count agent item(s), so it was not deleted.
             </div>
             <div class="table-responsive">
                 <table class="table table-sm data-table align-middle">
@@ -461,7 +461,7 @@ else
             @if (references.Count > 0)
             {
                 <div class="alert alert-warning">
-                    This MIB set is referenced by @references.Count agent or point item(s). Existing lookup snapshot remains until the next successful snapshot update.
+                    This MIB set is referenced by @references.Count agent item(s). Existing lookup snapshot remains until the next successful snapshot update.
                 </div>
             }
             <p class="mb-0">Delete the stored file and its file metadata?</p>

@@ -99,13 +99,16 @@ else
                                 {
                                     <div class="sourcepath-suggestion-state">Loading...</div>
                                 }
-                                else if (!string.IsNullOrWhiteSpace(sourcePathSuggestionError))
-                                {
-                                    <div class="sourcepath-suggestion-state">@sourcePathSuggestionError</div>
-                                }
                                 else if (sourcePathSuggestions.Count == 0)
                                 {
-                                    <div class="sourcepath-suggestion-state">No matching SNMP points.</div>
+                                    @if (!string.IsNullOrWhiteSpace(sourcePathSuggestionError))
+                                    {
+                                        <div class="sourcepath-suggestion-state">@sourcePathSuggestionError</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="sourcepath-suggestion-state">No matching SNMP points.</div>
+                                    }
                                 }
                                 else
                                 {
@@ -124,17 +127,34 @@ else
                                                 }
                                                 else
                                                 {
-                                                    @HighlightText(suggestion.PointName, sourcePathSearchText)
+                                                    @suggestion.NumericOid
                                                 }
                                             </span>
                                             <span class="sourcepath-suggestion-detail">
-                                                @if (HasMibLabel(suggestion))
+                                                @if (ShouldSearchSourcePath(sourcePathSearchText))
                                                 {
-                                                    <span>Point @HighlightText(suggestion.PointName, sourcePathSearchText)</span>
+                                                    <code>@HighlightText(suggestion.SourcePath, sourcePathSearchText)</code>
                                                 }
-                                                <code>@suggestion.SourcePath</code>
+                                                else
+                                                {
+                                                    <code>@suggestion.SourcePath</code>
+                                                }
                                             </span>
                                             <span class="sourcepath-suggestion-meta">@FormatSuggestionMeta(suggestion)</span>
+                                        </button>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(sourcePathSuggestionError))
+                                    {
+                                        <div class="sourcepath-suggestion-state">@sourcePathSuggestionError</div>
+                                    }
+                                    @if (sourcePathSuggestionHasMore)
+                                    {
+                                        <button class="sourcepath-suggestion-load-more"
+                                                type="button"
+                                                disabled="@sourcePathSuggestionLoadingMore"
+                                                @onmousedown:preventDefault="true"
+                                                @onmousedown="LoadMoreSourcePathSuggestionsAsync">
+                                            @(sourcePathSuggestionLoadingMore ? "Loading..." : "Load more")
                                         </button>
                                     }
                                 }
@@ -162,13 +182,16 @@ else
                                 {
                                     <div class="sourcepath-suggestion-state">Loading...</div>
                                 }
-                                else if (!string.IsNullOrWhiteSpace(redisKeySuggestionError))
-                                {
-                                    <div class="sourcepath-suggestion-state">@redisKeySuggestionError</div>
-                                }
                                 else if (redisKeySuggestions.Count == 0)
                                 {
-                                    <div class="sourcepath-suggestion-state">No matching Redis point keys.</div>
+                                    @if (!string.IsNullOrWhiteSpace(redisKeySuggestionError))
+                                    {
+                                        <div class="sourcepath-suggestion-state">@redisKeySuggestionError</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="sourcepath-suggestion-state">No matching Redis point keys.</div>
+                                    }
                                 }
                                 else
                                 {
@@ -182,6 +205,20 @@ else
                                                 @onmousedown="() => SelectRedisKeySuggestion(suggestion)">
                                             <span class="sourcepath-suggestion-main">@HighlightText(suggestion.RedisKey, redisKeySearchText)</span>
                                             <span class="sourcepath-suggestion-meta">Existing Redis point key</span>
+                                        </button>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(redisKeySuggestionError))
+                                    {
+                                        <div class="sourcepath-suggestion-state">@redisKeySuggestionError</div>
+                                    }
+                                    @if (redisKeySuggestionHasMore)
+                                    {
+                                        <button class="sourcepath-suggestion-load-more"
+                                                type="button"
+                                                disabled="@redisKeySuggestionLoadingMore"
+                                                @onmousedown:preventDefault="true"
+                                                @onmousedown="LoadMoreRedisKeySuggestionsAsync">
+                                            @(redisKeySuggestionLoadingMore ? "Loading..." : "Load more")
                                         </button>
                                     }
                                 }
@@ -217,6 +254,8 @@ else
 }
 
 @code {
+    private const int AutocompleteSuggestionPageSize = 24;
+
     private List<Ptlk.RedisSnmp.Models.RedisMapping> mappings = [];
     private Ptlk.RedisSnmp.Models.RedisMapping? deleteMapping;
     private int? mappingId;
@@ -226,12 +265,19 @@ else
     private bool isLoading;
     private bool sourcePathSuggestionsOpen;
     private bool sourcePathSuggestionLoading;
+    private bool sourcePathSuggestionLoadingMore;
+    private bool sourcePathSuggestionHasMore;
+    private int sourcePathSuggestionNextOffset;
     private int sourcePathSearchVersion;
     private string sourcePathSearchText = "";
     private string? sourcePathSuggestionError;
     private List<SourcePathSuggestion> sourcePathSuggestions = [];
     private bool redisKeySuggestionsOpen;
     private bool redisKeySuggestionLoading;
+    private bool redisKeySuggestionLoadingMore;
+    private bool redisKeySuggestionHasMore;
+    private long redisKeySuggestionNextCursor;
+    private int redisKeySuggestionNextPageOffset;
     private int redisKeySearchVersion;
     private string redisKeySearchText = "";
     private string? redisKeySuggestionError;
@@ -344,6 +390,9 @@ else
         sourcePathSuggestionError = null;
         sourcePathSearchText = sourcePath.Trim();
         sourcePathSuggestions = [];
+        sourcePathSuggestionLoadingMore = false;
+        sourcePathSuggestionHasMore = false;
+        sourcePathSuggestionNextOffset = 0;
 
         if (string.IsNullOrWhiteSpace(sourcePathSearchText))
         {
@@ -356,13 +405,17 @@ else
 
         try
         {
-            var suggestions = await Suggestions.SearchSnmpPointSuggestionsAsync(sourcePathSearchText);
+            var suggestions = await Suggestions.SearchSnmpPointSuggestionsAsync(
+                sourcePathSearchText,
+                AutocompleteSuggestionPageSize);
             if (searchVersion != sourcePathSearchVersion)
             {
                 return;
             }
 
-            sourcePathSuggestions = suggestions.ToList();
+            sourcePathSuggestions = suggestions.Items.ToList();
+            sourcePathSuggestionHasMore = suggestions.HasMore;
+            sourcePathSuggestionNextOffset = suggestions.NextOffset;
         }
         catch (Exception ex)
         {
@@ -378,6 +431,57 @@ else
             if (searchVersion == sourcePathSearchVersion)
             {
                 sourcePathSuggestionLoading = false;
+            }
+        }
+    }
+
+    private async Task LoadMoreSourcePathSuggestionsAsync()
+    {
+        if (sourcePathSuggestionLoading
+            || sourcePathSuggestionLoadingMore
+            || !sourcePathSuggestionHasMore
+            || string.IsNullOrWhiteSpace(sourcePathSearchText))
+        {
+            return;
+        }
+
+        var searchVersion = sourcePathSearchVersion;
+        var query = sourcePathSearchText;
+        sourcePathSuggestionLoadingMore = true;
+        sourcePathSuggestionError = null;
+
+        try
+        {
+            var suggestions = await Suggestions.SearchSnmpPointSuggestionsAsync(
+                query,
+                AutocompleteSuggestionPageSize,
+                sourcePathSuggestionNextOffset);
+            if (searchVersion != sourcePathSearchVersion
+                || !string.Equals(query, sourcePathSearchText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            sourcePathSuggestions.AddRange(suggestions.Items);
+            sourcePathSuggestionHasMore = suggestions.HasMore;
+            sourcePathSuggestionNextOffset = suggestions.NextOffset;
+        }
+        catch (Exception ex)
+        {
+            if (searchVersion != sourcePathSearchVersion
+                || !string.Equals(query, sourcePathSearchText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            sourcePathSuggestionError = ex.Message;
+        }
+        finally
+        {
+            if (searchVersion == sourcePathSearchVersion
+                && string.Equals(query, sourcePathSearchText, StringComparison.Ordinal))
+            {
+                sourcePathSuggestionLoadingMore = false;
             }
         }
     }
@@ -402,6 +506,9 @@ else
     {
         sourcePathSuggestionsOpen = false;
         sourcePathSuggestionLoading = false;
+        sourcePathSuggestionLoadingMore = false;
+        sourcePathSuggestionHasMore = false;
+        sourcePathSuggestionNextOffset = 0;
         sourcePathSearchText = "";
         sourcePathSuggestionError = null;
         sourcePathSuggestions = [];
@@ -427,6 +534,10 @@ else
         redisKeySuggestionError = null;
         redisKeySearchText = redisKey.Trim();
         redisKeySuggestions = [];
+        redisKeySuggestionLoadingMore = false;
+        redisKeySuggestionHasMore = false;
+        redisKeySuggestionNextCursor = 0;
+        redisKeySuggestionNextPageOffset = 0;
 
         if (string.IsNullOrWhiteSpace(redisKeySearchText))
         {
@@ -439,13 +550,18 @@ else
 
         try
         {
-            var suggestions = await RedisKeySuggestions.SearchPointKeysAsync(redisKeySearchText);
+            var suggestions = await RedisKeySuggestions.SearchPointKeysAsync(
+                redisKeySearchText,
+                AutocompleteSuggestionPageSize);
             if (searchVersion != redisKeySearchVersion)
             {
                 return;
             }
 
-            redisKeySuggestions = suggestions.ToList();
+            redisKeySuggestions = DistinctRedisKeySuggestions(suggestions.Items);
+            redisKeySuggestionHasMore = suggestions.HasMore;
+            redisKeySuggestionNextCursor = suggestions.NextCursor;
+            redisKeySuggestionNextPageOffset = suggestions.NextPageOffset;
         }
         catch (Exception ex)
         {
@@ -461,6 +577,59 @@ else
             if (searchVersion == redisKeySearchVersion)
             {
                 redisKeySuggestionLoading = false;
+            }
+        }
+    }
+
+    private async Task LoadMoreRedisKeySuggestionsAsync()
+    {
+        if (redisKeySuggestionLoading
+            || redisKeySuggestionLoadingMore
+            || !redisKeySuggestionHasMore
+            || string.IsNullOrWhiteSpace(redisKeySearchText))
+        {
+            return;
+        }
+
+        var searchVersion = redisKeySearchVersion;
+        var query = redisKeySearchText;
+        redisKeySuggestionLoadingMore = true;
+        redisKeySuggestionError = null;
+
+        try
+        {
+            var suggestions = await RedisKeySuggestions.SearchPointKeysAsync(
+                query,
+                AutocompleteSuggestionPageSize,
+                redisKeySuggestionNextCursor,
+                redisKeySuggestionNextPageOffset);
+            if (searchVersion != redisKeySearchVersion
+                || !string.Equals(query, redisKeySearchText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            AppendRedisKeySuggestions(suggestions.Items);
+            redisKeySuggestionHasMore = suggestions.HasMore;
+            redisKeySuggestionNextCursor = suggestions.NextCursor;
+            redisKeySuggestionNextPageOffset = suggestions.NextPageOffset;
+        }
+        catch (Exception ex)
+        {
+            if (searchVersion != redisKeySearchVersion
+                || !string.Equals(query, redisKeySearchText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            redisKeySuggestionError = ex.Message;
+        }
+        finally
+        {
+            if (searchVersion == redisKeySearchVersion
+                && string.Equals(query, redisKeySearchText, StringComparison.Ordinal))
+            {
+                redisKeySuggestionLoadingMore = false;
             }
         }
     }
@@ -485,13 +654,51 @@ else
     {
         redisKeySuggestionsOpen = false;
         redisKeySuggestionLoading = false;
+        redisKeySuggestionLoadingMore = false;
+        redisKeySuggestionHasMore = false;
+        redisKeySuggestionNextCursor = 0;
+        redisKeySuggestionNextPageOffset = 0;
         redisKeySearchText = "";
         redisKeySuggestionError = null;
         redisKeySuggestions = [];
     }
 
+    private void AppendRedisKeySuggestions(IEnumerable<RedisKeySuggestion> suggestions)
+    {
+        var existingKeys = redisKeySuggestions
+            .Select(suggestion => suggestion.RedisKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var suggestion in suggestions)
+        {
+            if (existingKeys.Add(suggestion.RedisKey))
+            {
+                redisKeySuggestions.Add(suggestion);
+            }
+        }
+    }
+
+    private static List<RedisKeySuggestion> DistinctRedisKeySuggestions(IEnumerable<RedisKeySuggestion> suggestions)
+    {
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var distinctSuggestions = new List<RedisKeySuggestion>();
+
+        foreach (var suggestion in suggestions)
+        {
+            if (seenKeys.Add(suggestion.RedisKey))
+            {
+                distinctSuggestions.Add(suggestion);
+            }
+        }
+
+        return distinctSuggestions;
+    }
+
     private static bool HasMibLabel(SourcePathSuggestion suggestion) =>
         !string.IsNullOrWhiteSpace(suggestion.MibLabel);
+
+    private static bool ShouldSearchSourcePath(string query) =>
+        query.Trim().StartsWith("snmp:", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatSuggestionMeta(SourcePathSuggestion suggestion)
     {

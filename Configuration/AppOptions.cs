@@ -40,7 +40,7 @@ public sealed class SnmpRuntimeOptions
 {
     public int DefaultPollingRateMs { get; set; } = 1000;
     public int DefaultTimeoutMs { get; set; } = 5000;
-    public int DefaultWalkTimeoutMs { get; set; } = 60000;
+    public int DefaultWalkTimeoutMs { get; set; } = 5000;
     public int DefaultRetryCount { get; set; } = 1;
 }
 
