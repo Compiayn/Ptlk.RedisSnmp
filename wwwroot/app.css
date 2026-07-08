@@ -347,6 +347,97 @@ fieldset:disabled .btn:active {
     white-space: pre;
 }
 
+.sourcepath-autocomplete {
+    position: relative;
+    z-index: 1;
+}
+
+.sourcepath-autocomplete:focus-within {
+    z-index: 4;
+}
+
+.sourcepath-suggestion-menu {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    left: 0;
+    right: 0;
+    z-index: 1080;
+    max-height: 18rem;
+    overflow-y: auto;
+    border: 1px solid #b8c4cf;
+    border-radius: 6px;
+    background: #ffffff;
+    box-shadow: 0 14px 30px rgba(14, 22, 31, 0.16);
+}
+
+.sourcepath-suggestion-item {
+    display: grid;
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+    padding: 0.65rem 0.75rem;
+    border: 0;
+    border-bottom: 1px solid #eef2f5;
+    background: #ffffff;
+    color: #1f2933;
+    text-align: left;
+}
+
+.sourcepath-suggestion-item:last-child {
+    border-bottom: 0;
+}
+
+.sourcepath-suggestion-item:hover,
+.sourcepath-suggestion-item:focus-visible {
+    background: #f3f7fa;
+    outline: 0;
+}
+
+.sourcepath-suggestion-item:active {
+    background: #e8f1f7;
+}
+
+.sourcepath-suggestion-main {
+    min-width: 0;
+    color: #193247;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.sourcepath-suggestion-detail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    min-width: 0;
+    color: #516071;
+    font-size: 0.86rem;
+}
+
+.sourcepath-suggestion-detail code {
+    color: #364759;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+.sourcepath-suggestion-meta {
+    color: #687583;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.sourcepath-suggestion-state {
+    padding: 0.7rem 0.75rem;
+    color: #596675;
+    font-size: 0.9rem;
+}
+
+.sourcepath-match {
+    padding: 0 0.05rem;
+    border-radius: 2px;
+    background: #fff176;
+    color: inherit;
+}
+
 .dialog-backdrop {
     position: fixed;
     inset: 0;
@@ -367,6 +458,10 @@ fieldset:disabled .btn:active {
     border: 1px solid #cfd8e2;
     border-radius: 8px;
     box-shadow: 0 20px 54px rgba(14, 22, 31, 0.28);
+}
+
+.dialog-panel.autocomplete-dialog-panel {
+    overflow: visible;
 }
 
 .dialog-panel.wide {

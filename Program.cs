@@ -47,6 +47,7 @@ builder.Services.AddSingleton<INetSnmpProcessRunner, NetSnmpProcessRunner>();
 
 builder.Services.AddScoped<RedisPointStateService>();
 builder.Services.AddScoped<RedisMappingValidationService>();
+builder.Services.AddScoped<RedisKeySuggestionService>();
 builder.Services.AddScoped<SnmpCredentialService>();
 builder.Services.AddScoped<SnmpAgentService>();
 builder.Services.AddScoped<SnmpPointService>();

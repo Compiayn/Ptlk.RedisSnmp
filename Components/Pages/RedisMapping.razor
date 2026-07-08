@@ -1,6 +1,8 @@
 @page "/redis-mapping"
 @rendermode InteractiveServer
 @inject RedisMappingValidationService Validation
+@inject PathSuggestionService Suggestions
+@inject RedisKeySuggestionService RedisKeySuggestions
 @inject ScreenAlertService ScreenAlerts
 
 <div class="page-header">
@@ -67,7 +69,7 @@ else
 @if (mappingDialogOpen)
 {
     <div class="dialog-backdrop" @onclick="CloseMappingDialog"></div>
-    <div class="dialog-panel" role="dialog" aria-modal="true">
+    <div class="dialog-panel autocomplete-dialog-panel" role="dialog" aria-modal="true">
         <div class="dialog-header">
             <div>
                 <h2 class="m-0">@((mappingId > 0) ? "Edit Mapping" : "Add Mapping")</h2>
@@ -79,11 +81,113 @@ else
             <div class="row g-3">
                 <div class="col-12">
                     <label class="form-label">SourcePath</label>
-                    <input class="form-control" @bind="sourcePath" placeholder="snmp:agent1/1.3.6.1.2.1.1.3.0" />
+                    <div class="sourcepath-autocomplete">
+                        <input class="form-control"
+                               value="@sourcePath"
+                               placeholder="snmp:agent1/1.3.6.1.2.1.1.3.0"
+                               autocomplete="off"
+                               aria-autocomplete="list"
+                               aria-expanded="@SourcePathSuggestionsVisible"
+                               aria-controls="sourcepath-suggestions"
+                               @onfocus="() => OpenSourcePathSuggestionsAsync()"
+                               @oninput="OnSourcePathInputAsync"
+                               @onkeydown="HandleSourcePathKeyDown" />
+                        @if (SourcePathSuggestionsVisible)
+                        {
+                            <div class="sourcepath-suggestion-menu" id="sourcepath-suggestions" role="listbox">
+                                @if (sourcePathSuggestionLoading)
+                                {
+                                    <div class="sourcepath-suggestion-state">Loading...</div>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(sourcePathSuggestionError))
+                                {
+                                    <div class="sourcepath-suggestion-state">@sourcePathSuggestionError</div>
+                                }
+                                else if (sourcePathSuggestions.Count == 0)
+                                {
+                                    <div class="sourcepath-suggestion-state">No matching SNMP points.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var suggestion in sourcePathSuggestions)
+                                    {
+                                        <button class="sourcepath-suggestion-item"
+                                                type="button"
+                                                role="option"
+                                                @key="suggestion.SourcePath"
+                                                @onmousedown:preventDefault="true"
+                                                @onmousedown="() => SelectSourcePathSuggestion(suggestion)">
+                                            <span class="sourcepath-suggestion-main">
+                                                @if (HasMibLabel(suggestion))
+                                                {
+                                                    @HighlightText(suggestion.MibLabel, sourcePathSearchText)
+                                                }
+                                                else
+                                                {
+                                                    @HighlightText(suggestion.PointName, sourcePathSearchText)
+                                                }
+                                            </span>
+                                            <span class="sourcepath-suggestion-detail">
+                                                @if (HasMibLabel(suggestion))
+                                                {
+                                                    <span>Point @HighlightText(suggestion.PointName, sourcePathSearchText)</span>
+                                                }
+                                                <code>@suggestion.SourcePath</code>
+                                            </span>
+                                            <span class="sourcepath-suggestion-meta">@FormatSuggestionMeta(suggestion)</span>
+                                        </button>
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
                 </div>
                 <div class="col-12">
                     <label class="form-label">Redis key</label>
-                    <input class="form-control" @bind="redisKey" placeholder="point:site:snmp:sysUpTime" />
+                    <div class="sourcepath-autocomplete">
+                        <input class="form-control"
+                               value="@redisKey"
+                               placeholder="point:site:snmp:sysUpTime"
+                               autocomplete="off"
+                               aria-autocomplete="list"
+                               aria-expanded="@RedisKeySuggestionsVisible"
+                               aria-controls="rediskey-suggestions"
+                               @onfocus="() => OpenRedisKeySuggestionsAsync()"
+                               @oninput="OnRedisKeyInputAsync"
+                               @onkeydown="HandleRedisKeyKeyDown" />
+                        @if (RedisKeySuggestionsVisible)
+                        {
+                            <div class="sourcepath-suggestion-menu" id="rediskey-suggestions" role="listbox">
+                                @if (redisKeySuggestionLoading)
+                                {
+                                    <div class="sourcepath-suggestion-state">Loading...</div>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(redisKeySuggestionError))
+                                {
+                                    <div class="sourcepath-suggestion-state">@redisKeySuggestionError</div>
+                                }
+                                else if (redisKeySuggestions.Count == 0)
+                                {
+                                    <div class="sourcepath-suggestion-state">No matching Redis point keys.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var suggestion in redisKeySuggestions)
+                                    {
+                                        <button class="sourcepath-suggestion-item"
+                                                type="button"
+                                                role="option"
+                                                @key="suggestion.RedisKey"
+                                                @onmousedown:preventDefault="true"
+                                                @onmousedown="() => SelectRedisKeySuggestion(suggestion)">
+                                            <span class="sourcepath-suggestion-main">@HighlightText(suggestion.RedisKey, redisKeySearchText)</span>
+                                            <span class="sourcepath-suggestion-meta">Existing Redis point key</span>
+                                        </button>
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
                 </div>
             </div>
         </div>
@@ -120,7 +224,25 @@ else
     private string redisKey = "";
     private bool mappingDialogOpen;
     private bool isLoading;
+    private bool sourcePathSuggestionsOpen;
+    private bool sourcePathSuggestionLoading;
+    private int sourcePathSearchVersion;
+    private string sourcePathSearchText = "";
+    private string? sourcePathSuggestionError;
+    private List<SourcePathSuggestion> sourcePathSuggestions = [];
+    private bool redisKeySuggestionsOpen;
+    private bool redisKeySuggestionLoading;
+    private int redisKeySearchVersion;
+    private string redisKeySearchText = "";
+    private string? redisKeySuggestionError;
+    private List<RedisKeySuggestion> redisKeySuggestions = [];
     private DateTimeOffset? lastLoaded;
+
+    private bool SourcePathSuggestionsVisible =>
+        sourcePathSuggestionsOpen && !string.IsNullOrWhiteSpace(sourcePathSearchText);
+
+    private bool RedisKeySuggestionsVisible =>
+        redisKeySuggestionsOpen && !string.IsNullOrWhiteSpace(redisKeySearchText);
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -142,15 +264,23 @@ else
         }
     }
 
-    private void OpenMappingDialog(Ptlk.RedisSnmp.Models.RedisMapping? item = null)
+    private async Task OpenMappingDialog(Ptlk.RedisSnmp.Models.RedisMapping? item = null)
     {
         mappingId = item?.Id;
         sourcePath = item?.SourcePath ?? "";
         redisKey = item?.RedisKey ?? "";
+        ResetSourcePathSuggestions();
+        ResetRedisKeySuggestions();
         mappingDialogOpen = true;
+        await Task.CompletedTask;
     }
 
-    private void CloseMappingDialog() => mappingDialogOpen = false;
+    private void CloseMappingDialog()
+    {
+        mappingDialogOpen = false;
+        ResetSourcePathSuggestions();
+        ResetRedisKeySuggestions();
+    }
 
     private async Task SaveAsync()
     {
@@ -193,4 +323,228 @@ else
 
     private static string FormatDate(DateTime value) =>
         value == default ? "-" : value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
+    private async Task OnSourcePathInputAsync(ChangeEventArgs args)
+    {
+        sourcePath = args.Value?.ToString() ?? "";
+        CloseRedisKeySuggestions();
+        sourcePathSuggestionsOpen = true;
+        await RefreshSourcePathSuggestionsAsync();
+    }
+
+    private async Task OpenSourcePathSuggestionsAsync()
+    {
+        CloseRedisKeySuggestions();
+        sourcePathSuggestionsOpen = true;
+        await RefreshSourcePathSuggestionsAsync();
+    }
+
+    private async Task RefreshSourcePathSuggestionsAsync()
+    {
+        sourcePathSuggestionError = null;
+        sourcePathSearchText = sourcePath.Trim();
+        sourcePathSuggestions = [];
+
+        if (string.IsNullOrWhiteSpace(sourcePathSearchText))
+        {
+            sourcePathSuggestionLoading = false;
+            return;
+        }
+
+        var searchVersion = ++sourcePathSearchVersion;
+        sourcePathSuggestionLoading = true;
+
+        try
+        {
+            var suggestions = await Suggestions.SearchSnmpPointSuggestionsAsync(sourcePathSearchText);
+            if (searchVersion != sourcePathSearchVersion)
+            {
+                return;
+            }
+
+            sourcePathSuggestions = suggestions.ToList();
+        }
+        catch (Exception ex)
+        {
+            if (searchVersion != sourcePathSearchVersion)
+            {
+                return;
+            }
+
+            sourcePathSuggestionError = ex.Message;
+        }
+        finally
+        {
+            if (searchVersion == sourcePathSearchVersion)
+            {
+                sourcePathSuggestionLoading = false;
+            }
+        }
+    }
+
+    private void SelectSourcePathSuggestion(SourcePathSuggestion suggestion)
+    {
+        sourcePath = suggestion.SourcePath;
+        ResetSourcePathSuggestions();
+    }
+
+    private void HandleSourcePathKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            CloseSourcePathSuggestions();
+        }
+    }
+
+    private void CloseSourcePathSuggestions() => sourcePathSuggestionsOpen = false;
+
+    private void ResetSourcePathSuggestions()
+    {
+        sourcePathSuggestionsOpen = false;
+        sourcePathSuggestionLoading = false;
+        sourcePathSearchText = "";
+        sourcePathSuggestionError = null;
+        sourcePathSuggestions = [];
+    }
+
+    private async Task OnRedisKeyInputAsync(ChangeEventArgs args)
+    {
+        redisKey = args.Value?.ToString() ?? "";
+        CloseSourcePathSuggestions();
+        redisKeySuggestionsOpen = true;
+        await RefreshRedisKeySuggestionsAsync();
+    }
+
+    private async Task OpenRedisKeySuggestionsAsync()
+    {
+        CloseSourcePathSuggestions();
+        redisKeySuggestionsOpen = true;
+        await RefreshRedisKeySuggestionsAsync();
+    }
+
+    private async Task RefreshRedisKeySuggestionsAsync()
+    {
+        redisKeySuggestionError = null;
+        redisKeySearchText = redisKey.Trim();
+        redisKeySuggestions = [];
+
+        if (string.IsNullOrWhiteSpace(redisKeySearchText))
+        {
+            redisKeySuggestionLoading = false;
+            return;
+        }
+
+        var searchVersion = ++redisKeySearchVersion;
+        redisKeySuggestionLoading = true;
+
+        try
+        {
+            var suggestions = await RedisKeySuggestions.SearchPointKeysAsync(redisKeySearchText);
+            if (searchVersion != redisKeySearchVersion)
+            {
+                return;
+            }
+
+            redisKeySuggestions = suggestions.ToList();
+        }
+        catch (Exception ex)
+        {
+            if (searchVersion != redisKeySearchVersion)
+            {
+                return;
+            }
+
+            redisKeySuggestionError = ex.Message;
+        }
+        finally
+        {
+            if (searchVersion == redisKeySearchVersion)
+            {
+                redisKeySuggestionLoading = false;
+            }
+        }
+    }
+
+    private void SelectRedisKeySuggestion(RedisKeySuggestion suggestion)
+    {
+        redisKey = suggestion.RedisKey;
+        ResetRedisKeySuggestions();
+    }
+
+    private void HandleRedisKeyKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            CloseRedisKeySuggestions();
+        }
+    }
+
+    private void CloseRedisKeySuggestions() => redisKeySuggestionsOpen = false;
+
+    private void ResetRedisKeySuggestions()
+    {
+        redisKeySuggestionsOpen = false;
+        redisKeySuggestionLoading = false;
+        redisKeySearchText = "";
+        redisKeySuggestionError = null;
+        redisKeySuggestions = [];
+    }
+
+    private static bool HasMibLabel(SourcePathSuggestion suggestion) =>
+        !string.IsNullOrWhiteSpace(suggestion.MibLabel);
+
+    private static string FormatSuggestionMeta(SourcePathSuggestion suggestion)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(suggestion.NumericOid))
+        {
+            parts.Add($"OID {suggestion.NumericOid}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(suggestion.MibModule))
+        {
+            parts.Add(suggestion.MibModule);
+        }
+
+        if (!string.IsNullOrWhiteSpace(suggestion.MibSyntax))
+        {
+            parts.Add(suggestion.MibSyntax);
+        }
+
+        if (!string.IsNullOrWhiteSpace(suggestion.MibAccess))
+        {
+            parts.Add(suggestion.MibAccess);
+        }
+
+        return string.Join(" / ", parts);
+    }
+
+    private static MarkupString HighlightText(string? value, string query)
+    {
+        var text = value ?? "";
+        if (text.Length == 0 || string.IsNullOrWhiteSpace(query))
+        {
+            return new MarkupString(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text));
+        }
+
+        var builder = new System.Text.StringBuilder();
+        var searchIndex = 0;
+        while (searchIndex < text.Length)
+        {
+            var matchIndex = text.IndexOf(query, searchIndex, StringComparison.OrdinalIgnoreCase);
+            if (matchIndex < 0)
+            {
+                builder.Append(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text[searchIndex..]));
+                break;
+            }
+
+            builder.Append(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text[searchIndex..matchIndex]));
+            builder.Append("<mark class=\"sourcepath-match\">");
+            builder.Append(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text.Substring(matchIndex, query.Length)));
+            builder.Append("</mark>");
+            searchIndex = matchIndex + query.Length;
+        }
+
+        return new MarkupString(builder.ToString());
+    }
 }
