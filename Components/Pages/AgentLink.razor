@@ -7,6 +7,7 @@
 @inject MibSetService MibSets
 @inject MibLookupService MibLookup
 @inject SnmpSourcePathService Paths
+@inject ScreenAlertService ScreenAlerts
 
 <div class="page-header">
     <div>
@@ -15,10 +16,7 @@
     </div>
 </div>
 
-@if (!string.IsNullOrWhiteSpace(message))
-{
-    <div class="@AlertClass">@message</div>
-}
+<ScreenAlertHost />
 
 <div class="toolbar">
     <div>
@@ -697,8 +695,6 @@ else
     private string? writeCommunity;
     private string? authPassword;
     private string? privPassword;
-    private string? message;
-    private bool messageIsError;
     private bool credentialDialogOpen;
     private bool agentDialogOpen;
     private bool pointDialogOpen;
@@ -731,7 +727,6 @@ else
     private string? pointManagerMessage;
     private bool pointManagerMessageIsError;
 
-    private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
     private IReadOnlyList<WalkTreeRow> VisibleWalkRows => FlattenWalkTree(walkTree, expandedWalkNodes);
     private IReadOnlyList<SnmpPointConfig> ManagedAgentPoints =>
         generateAgent is null
@@ -742,10 +737,17 @@ else
 
     private async Task LoadAsync()
     {
-        credentials = await Credentials.ListAsync();
-        mibSetOptions = await MibSets.ListOptionsAsync();
-        agents = await Agents.ListAsync();
-        points = await Points.ListAsync();
+        try
+        {
+            credentials = await Credentials.ListAsync();
+            mibSetOptions = await MibSets.ListOptionsAsync();
+            agents = await Agents.ListAsync();
+            points = await Points.ListAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
     }
 
     private void OpenCredentialDialog(SnmpCredentialConfig? item = null)
@@ -1192,8 +1194,10 @@ else
 
     private void SetMessage(string value, bool isError = false)
     {
-        message = value;
-        messageIsError = isError;
+        _ = ScreenAlerts.ShowAsync(
+            value,
+            isError ? ScreenAlertSeverity.Error : ScreenAlertSeverity.Success,
+            isError ? "AgentLink failed" : "AgentLink");
     }
 
     private void SetPointManagerMessage(string value, bool isError = false)

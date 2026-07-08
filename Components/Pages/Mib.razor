@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject MibSetService MibSets
 @inject MibLookupService Lookup
+@inject ScreenAlertService ScreenAlerts
 
 <div class="page-header">
     <div>
@@ -14,10 +15,7 @@
     </div>
 </div>
 
-@if (!string.IsNullOrWhiteSpace(message))
-{
-    <div class="@AlertClass">@message</div>
-}
+<ScreenAlertHost />
 
 <div class="toolbar">
     <div>
@@ -503,12 +501,9 @@ else
     private bool setDialogOpen;
     private bool isLoading;
     private bool isImporting;
-    private string? message;
-    private bool messageIsError;
     private string? detailMessage;
     private bool detailMessageIsError;
 
-    private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
     private string DetailAlertClass => detailMessageIsError ? "alert alert-danger" : "alert alert-info";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
@@ -838,8 +833,10 @@ else
 
     private void SetMessage(string value, bool isError = false)
     {
-        message = value;
-        messageIsError = isError;
+        _ = ScreenAlerts.ShowAsync(
+            value,
+            isError ? ScreenAlertSeverity.Error : ScreenAlertSeverity.Success,
+            isError ? "MIB Sets failed" : "MIB Sets");
     }
 
     private void SetDetailMessage(string value, bool isError = false)

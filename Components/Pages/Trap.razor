@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject LogService Logs
 @inject RuntimeModeService Runtime
+@inject ScreenAlertService ScreenAlerts
 
 <div class="page-header">
     <div>
@@ -10,6 +11,8 @@
     </div>
     <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
 </div>
+
+<ScreenAlertHost />
 
 <section class="surface">
     <div class="row g-3">
@@ -23,11 +26,6 @@
         </div>
     </div>
 </section>
-
-@if (!string.IsNullOrWhiteSpace(error))
-{
-    <div class="alert alert-danger">@error</div>
-}
 
 @if (lastLoaded is not null)
 {
@@ -73,7 +71,6 @@ else
 
 @code {
     private IReadOnlyList<SnmpTrapLogEntry> traps = [];
-    private string? error;
     private bool isLoading;
     private DateTimeOffset? lastLoaded;
 
@@ -84,13 +81,12 @@ else
         try
         {
             isLoading = true;
-            error = null;
             traps = await Logs.QueryRecentTrapsAsync();
             lastLoaded = DateTimeOffset.Now;
         }
         catch (Exception ex)
         {
-            error = ex.Message;
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Trap refresh failed");
         }
         finally
         {
