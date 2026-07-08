@@ -1,0 +1,208 @@
+@implements IDisposable
+@inject ScreenAlertService ScreenAlerts
+
+@if (current is not null)
+{
+    <div class="screen-alert-region" aria-live="@AriaLive(current)" aria-atomic="true">
+        <div @key="current.Id" class="@AlertClass(current, isLeaving)" role="@AlertRole(current)" @onmouseenter="PauseCurrent" @onmouseleave="ResumeCurrent">
+            <div class="screen-alert-content">
+                <div class="screen-alert-title">@AlertTitle(current)</div>
+                <div class="screen-alert-message">@current.Message</div>
+            </div>
+            <button class="screen-alert-close" type="button" aria-label="Dismiss alert" @onclick="DismissCurrentAsync">x</button>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly TimeSpan ExitAnimationDuration = TimeSpan.FromMilliseconds(180);
+    private readonly Queue<ScreenAlertMessage> queue = new();
+    private ScreenAlertMessage? current;
+    private CancellationTokenSource? timerCancellation;
+    private DateTimeOffset dismissAt;
+    private TimeSpan remainingDelay;
+    private bool isPaused;
+    private bool isLeaving;
+    private bool disposed;
+
+    protected override void OnInitialized()
+    {
+        ScreenAlerts.AlertsChanged += OnAlertsChanged;
+        DrainAlerts();
+    }
+
+    private void OnAlertsChanged()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(DrainAlerts);
+    }
+
+    private void DrainAlerts()
+    {
+        foreach (var alert in ScreenAlerts.Drain())
+        {
+            queue.Enqueue(alert);
+        }
+
+        if (current is null)
+        {
+            ShowNext();
+            return;
+        }
+
+        StateHasChanged();
+    }
+
+    private void ShowNext()
+    {
+        CancelTimer();
+        current = queue.Count == 0 ? null : queue.Dequeue();
+        remainingDelay = TimeSpan.Zero;
+        isPaused = false;
+        isLeaving = false;
+
+        if (current is not null)
+        {
+            StartTimer(current, current.Duration);
+        }
+
+        StateHasChanged();
+    }
+
+    private void StartTimer(ScreenAlertMessage alert, TimeSpan delay)
+    {
+        CancelTimer();
+        timerCancellation = new CancellationTokenSource();
+        dismissAt = DateTimeOffset.Now.Add(delay);
+        _ = RunTimerAsync(alert.Id, delay, timerCancellation.Token);
+    }
+
+    private async Task RunTimerAsync(Guid alertId, TimeSpan delay, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(delay, cancellationToken);
+            await InvokeAsync(async () =>
+            {
+                if (!isPaused && current?.Id == alertId)
+                {
+                    await CompleteCurrentAsync();
+                }
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private void PauseCurrent()
+    {
+        if (current is null || isPaused || isLeaving)
+        {
+            return;
+        }
+
+        isPaused = true;
+        remainingDelay = dismissAt - DateTimeOffset.Now;
+        if (remainingDelay < TimeSpan.Zero)
+        {
+            remainingDelay = TimeSpan.Zero;
+        }
+
+        CancelTimer();
+    }
+
+    private void ResumeCurrent()
+    {
+        if (current is null || !isPaused || isLeaving)
+        {
+            return;
+        }
+
+        isPaused = false;
+        if (remainingDelay <= TimeSpan.Zero)
+        {
+            _ = CompleteCurrentAsync();
+            return;
+        }
+
+        StartTimer(current, remainingDelay);
+    }
+
+    private async Task DismissCurrentAsync()
+    {
+        await CompleteCurrentAsync();
+    }
+
+    private async Task CompleteCurrentAsync()
+    {
+        CancelTimer();
+        isPaused = false;
+
+        if (current is null)
+        {
+            return;
+        }
+
+        if (queue.Count > 0)
+        {
+            ShowNext();
+            return;
+        }
+
+        isLeaving = true;
+        StateHasChanged();
+
+        await Task.Delay(ExitAnimationDuration);
+        if (disposed)
+        {
+            return;
+        }
+
+        if (queue.Count > 0)
+        {
+            ShowNext();
+            return;
+        }
+
+        current = null;
+        isLeaving = false;
+        StateHasChanged();
+    }
+
+    private void CancelTimer()
+    {
+        timerCancellation?.Cancel();
+        timerCancellation?.Dispose();
+        timerCancellation = null;
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        ScreenAlerts.AlertsChanged -= OnAlertsChanged;
+        CancelTimer();
+    }
+
+    private static string AlertClass(ScreenAlertMessage alert, bool isLeaving) =>
+        $"screen-alert screen-alert-{alert.Severity.ToString().ToLowerInvariant()}{(isLeaving ? " leaving" : "")}";
+
+    private static string AlertTitle(ScreenAlertMessage alert) =>
+        alert.Title ?? alert.Severity switch
+        {
+            ScreenAlertSeverity.Success => "Completed",
+            ScreenAlertSeverity.Warning => "Warning",
+            ScreenAlertSeverity.Error => "Error",
+            _ => "Notice"
+        };
+
+    private static string AlertRole(ScreenAlertMessage alert) =>
+        alert.Severity is ScreenAlertSeverity.Error or ScreenAlertSeverity.Warning ? "alert" : "status";
+
+    private static string AriaLive(ScreenAlertMessage alert) =>
+        alert.Severity is ScreenAlertSeverity.Error or ScreenAlertSeverity.Warning ? "assertive" : "polite";
+}

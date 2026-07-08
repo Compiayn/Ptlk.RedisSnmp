@@ -13,6 +13,7 @@ using Ptlk.RedisSnmp.Services.Redis;
 using Ptlk.RedisSnmp.Services.Snmp;
 using Ptlk.RedisSnmp.Services.Startup;
 using Ptlk.RedisSnmp.Services.Trap;
+using Ptlk.RedisSnmp.Services.Ui;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -64,6 +65,7 @@ builder.Services.AddScoped<TrapParser>();
 builder.Services.AddScoped<TrapEventPublisher>();
 builder.Services.AddScoped<CsvConfigService>();
 builder.Services.AddScoped<ZipConfigService>();
+builder.Services.AddScoped<ScreenAlertService>();
 
 builder.Services.AddHostedService<StartupGateService>();
 builder.Services.AddHostedService<RedisPointOwnershipHostedService>();

@@ -231,6 +231,103 @@ fieldset:disabled .btn:active {
     font-size: 0.85rem;
 }
 
+.screen-alert-region {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    z-index: 1100;
+    width: min(420px, calc(100vw - 2rem));
+    transform: translateX(-50%);
+    pointer-events: none;
+}
+
+.screen-alert {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: start;
+    padding: 0.85rem 0.9rem;
+    border: 1px solid #cfd8e2;
+    border-left-width: 4px;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1f2933;
+    box-shadow: 0 14px 34px rgba(14, 22, 31, 0.18);
+    pointer-events: auto;
+    animation: screen-alert-slide-in 180ms ease-out;
+}
+
+.screen-alert.leaving {
+    animation: screen-alert-fade-out 180ms ease-in forwards;
+}
+
+.screen-alert-success {
+    border-left-color: #2f8f5b;
+}
+
+.screen-alert-warning {
+    border-left-color: #c08400;
+}
+
+.screen-alert-error {
+    border-left-color: #c2413a;
+}
+
+.screen-alert-info {
+    border-left-color: #0f5fa8;
+}
+
+.screen-alert-title {
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.screen-alert-message {
+    margin-top: 0.2rem;
+    color: #52616f;
+    overflow-wrap: anywhere;
+}
+
+.screen-alert-close {
+    width: 1.6rem;
+    height: 1.6rem;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #596675;
+    line-height: 1;
+}
+
+.screen-alert-close:hover,
+.screen-alert-close:focus {
+    background: #eef2f5;
+    color: #263442;
+}
+
+@keyframes screen-alert-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-0.85rem);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes screen-alert-fade-out {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateY(-0.6rem);
+    }
+}
+
 .code-cell {
     max-width: 34rem;
     overflow-wrap: anywhere;
@@ -451,6 +548,13 @@ small {
 }
 
 @media (max-width: 640.98px) {
+    .screen-alert-region {
+        left: 1rem;
+        right: 1rem;
+        width: auto;
+        transform: none;
+    }
+
     .page-header,
     .toolbar {
         align-items: stretch;

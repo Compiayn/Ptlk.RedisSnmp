@@ -5,6 +5,7 @@
 @inject BrowserSnapshotService SnapshotService
 @inject CommandDispatcherService Dispatcher
 @inject CommandExecutionService Commands
+@inject ScreenAlertService ScreenAlerts
 
 <div class="page-header">
     <div>
@@ -14,10 +15,7 @@
     <button class="btn btn-outline-primary" type="button" @onclick="RequestRefreshAsync" disabled="@isLoading">@(isLoading ? "Refreshing" : "Refresh")</button>
 </div>
 
-@if (!string.IsNullOrWhiteSpace(message))
-{
-    <div class="@AlertClass">@message</div>
-}
+<ScreenAlertHost />
 
 @if (lastLoaded is not null)
 {
@@ -115,14 +113,12 @@ else
     private CancellationTokenSource? pageCancellation;
     private CancellationTokenSource? debounceCancellation;
     private Task? refreshLoopTask;
-    private string? message;
-    private bool messageIsError;
+    private string? lastSnapshotAlertMessage;
     private bool isLoading;
     private bool hasLoaded;
     private bool disposed;
     private DateTimeOffset? lastLoaded;
 
-    private string AlertClass => messageIsError ? "alert alert-danger" : "alert alert-info";
     private TimeSpan RefreshInterval => TimeSpan.FromMilliseconds(BrowserSettings.Value.RefreshIntervalMs > 0
         ? BrowserSettings.Value.RefreshIntervalMs
         : 1000);
@@ -213,6 +209,7 @@ else
             var snapshot = await SnapshotService.SnapshotAsync(cancellationToken);
             rows = snapshot;
             lastLoaded = DateTimeOffset.Now;
+            lastSnapshotAlertMessage = null;
             foreach (var row in rows)
             {
                 writeValues.TryAdd(row.SourcePath, "");
@@ -225,7 +222,7 @@ else
         }
         catch (Exception ex)
         {
-            SetMessage(ex.Message, isError: true);
+            await ShowSnapshotErrorAsync(ex);
         }
         finally
         {
@@ -240,12 +237,12 @@ else
         try
         {
             var result = await Commands.DirectSnmpWriteAsync(sourcePath, writeValues.GetValueOrDefault(sourcePath) ?? "", "browser", pageCancellation?.Token ?? CancellationToken.None);
-            SetMessage($"{result.Status}: {result.Message}", result.Status.Equals("failed", StringComparison.OrdinalIgnoreCase));
+            await ShowWriteResultAsync("SNMP write", result.Status, result.Message);
             QueueDebouncedRefresh();
         }
         catch (Exception ex)
         {
-            SetMessage(ex.Message, isError: true);
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "SNMP write failed");
         }
     }
 
@@ -260,19 +257,33 @@ else
         {
             var mapping = new Ptlk.RedisSnmp.Models.RedisMapping { SourcePath = row.SourcePath, RedisKey = row.RedisKey };
             var result = await Dispatcher.DispatchHmiWriteAsync(mapping, writeValues.GetValueOrDefault(row.SourcePath) ?? "", "browser", pageCancellation?.Token ?? CancellationToken.None);
-            SetMessage($"{result.Status}: {result.Message}", result.Status.Equals("failed", StringComparison.OrdinalIgnoreCase));
+            await ShowWriteResultAsync("Redis write", result.Status, result.Message);
             QueueDebouncedRefresh();
         }
         catch (Exception ex)
         {
-            SetMessage(ex.Message, isError: true);
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Redis write failed");
         }
     }
 
-    private void SetMessage(string value, bool isError = false)
+    private async Task ShowSnapshotErrorAsync(Exception ex)
     {
-        message = value;
-        messageIsError = isError;
+        if (string.Equals(lastSnapshotAlertMessage, ex.Message, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        lastSnapshotAlertMessage = ex.Message;
+        await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Snapshot refresh failed");
+    }
+
+    private Task ShowWriteResultAsync(string operation, string status, string message)
+    {
+        var failed = status.Equals("failed", StringComparison.OrdinalIgnoreCase);
+        return ScreenAlerts.ShowAsync(
+            $"{status}: {message}",
+            failed ? ScreenAlertSeverity.Error : ScreenAlertSeverity.Success,
+            failed ? $"{operation} failed" : $"{operation} completed");
     }
 
     public async ValueTask DisposeAsync()
