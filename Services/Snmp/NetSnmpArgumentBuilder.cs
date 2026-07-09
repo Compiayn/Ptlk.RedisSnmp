@@ -5,6 +5,8 @@ namespace Ptlk.RedisSnmp.Services.Snmp;
 
 public sealed class NetSnmpArgumentBuilder(SnmpCredentialService credentials)
 {
+    private const string TrapLogFormat = "source=%b|security=%P|%V|%v\n";
+
     public NetSnmpCommandArguments BuildGet(SnmpAgentConfig agent, SnmpCredentialConfig? credential, string numericOid) =>
         BuildBase("snmpget", SnmpCommunityPurpose.Read, agent, credential, [NormalizeCliOid(numericOid)]);
 
@@ -47,7 +49,7 @@ public sealed class NetSnmpArgumentBuilder(SnmpCredentialService credentials)
 
     public NetSnmpCommandArguments BuildTrapDaemon(int listenPort, string configPath)
     {
-        var args = new[] { "-f", "-Lo", "-On", "-C", "-c", configPath, $"udp:{listenPort}" };
+        var args = new[] { "-f", "-Lo", "-On", "-F", TrapLogFormat, "-C", "-c", configPath, $"udp:{listenPort}" };
         return new NetSnmpCommandArguments("snmptrapd", args, args);
     }
 

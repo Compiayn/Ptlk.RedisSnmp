@@ -7,12 +7,14 @@ namespace Ptlk.RedisSnmp.Services.Trap;
 
 public sealed class NetSnmpTrapReceiverService(
     IServiceScopeFactory scopeFactory,
-    INetSnmpProcessRunner runner,
+    INetSnmpStreamingProcessRunner runner,
     IOptions<TrapOptions> trapOptions,
     IOptions<NetSnmpOptions> netSnmpOptions,
     RuntimeModeService runtime,
     ILogger<NetSnmpTrapReceiverService> logger) : BackgroundService
 {
+    private const string TrapLogFormat = "source=%b|security=%P|%V|%v\n";
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!trapOptions.Value.Enabled)
@@ -33,20 +35,17 @@ public sealed class NetSnmpTrapReceiverService(
             try
             {
                 runtime.SetTrap(RuntimeSubsystemStatus.Starting, $"Starting snmptrapd on UDP {trapOptions.Value.ListenPort}.");
-                var trapArgs = new[] { "-f", "-Lo", "-On", "-C", "-c", configPath, $"udp:{trapOptions.Value.ListenPort}" };
+                var trapArgs = new[] { "-f", "-Lo", "-On", "-F", TrapLogFormat, "-C", "-c", configPath, $"udp:{trapOptions.Value.ListenPort}" };
                 var command = new Ptlk.RedisSnmp.Contracts.Snmp.NetSnmpCommandArguments("snmptrapd", trapArgs, trapArgs);
-                var result = await runner.RunAsync(command, Timeout.InfiniteTimeSpan, stoppingToken);
+                var result = await runner.RunAsync(
+                    command,
+                    HandleTrapLineAsync,
+                    HandleErrorLineAsync,
+                    () => runtime.SetTrap(RuntimeSubsystemStatus.Normal, $"Listening for traps on UDP {trapOptions.Value.ListenPort}."),
+                    stoppingToken);
                 if (stoppingToken.IsCancellationRequested)
                 {
                     return;
-                }
-
-                if (!string.IsNullOrWhiteSpace(result.StandardOutput))
-                {
-                    using var scope = scopeFactory.CreateScope();
-                    var parser = scope.ServiceProvider.GetRequiredService<TrapParser>();
-                    var publisher = scope.ServiceProvider.GetRequiredService<TrapEventPublisher>();
-                    await publisher.PublishAsync(parser.Parse(result.StandardOutput), stoppingToken);
                 }
 
                 runtime.SetTrap(RuntimeSubsystemStatus.Degraded, result.StandardError.Length > 0 ? result.StandardError : "snmptrapd exited.");
@@ -63,5 +62,34 @@ public sealed class NetSnmpTrapReceiverService(
                 await Task.Delay(2000, stoppingToken);
             }
         }
+    }
+
+    private async Task HandleTrapLineAsync(string line, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
+        if (!line.TrimStart().StartsWith("source=", StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogDebug("Ignoring snmptrapd stdout line: {Line}", line);
+            return;
+        }
+
+        using var scope = scopeFactory.CreateScope();
+        var parser = scope.ServiceProvider.GetRequiredService<TrapParser>();
+        var publisher = scope.ServiceProvider.GetRequiredService<TrapEventPublisher>();
+        await publisher.PublishAsync(parser.Parse(line), cancellationToken);
+    }
+
+    private Task HandleErrorLineAsync(string line, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(line))
+        {
+            logger.LogWarning("snmptrapd: {Line}", line);
+        }
+
+        return Task.CompletedTask;
     }
 }

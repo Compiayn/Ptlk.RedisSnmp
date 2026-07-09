@@ -47,6 +47,7 @@ builder.Services.AddSingleton<SnmpValueCache>();
 builder.Services.AddSingleton<ExpressionValueCache>();
 builder.Services.AddSingleton<SnmpQualityPolicy>();
 builder.Services.AddSingleton<INetSnmpProcessRunner, NetSnmpProcessRunner>();
+builder.Services.AddSingleton<INetSnmpStreamingProcessRunner, NetSnmpStreamingProcessRunner>();
 
 builder.Services.AddScoped<RedisPointStateService>();
 builder.Services.AddScoped<RedisMappingValidationService>();
