@@ -35,8 +35,9 @@ public sealed class TrapEventPublisher(
         {
             var lookup = await mibLookup.LookupAsync(evaluation.PreferredMibSetId, varbind.Oid, cancellationToken)
                 ?? await mibLookup.LookupAsync(varbind.Oid, cancellationToken);
-            labels[varbind.Oid] = lookup?.SymbolicName;
-            labeled.Add(varbind with { Label = lookup?.SymbolicName });
+            var label = ToMibLabel(lookup, varbind.Oid);
+            labels[varbind.Oid] = label;
+            labeled.Add(varbind with { Label = label });
         }
 
         var trapLookup = trapOid is null
@@ -91,12 +92,19 @@ public sealed class TrapEventPublisher(
         {
             var payload = new
             {
-                schema = 1,
                 type = "snmp.trap.received",
                 diagnosticId = diagnostic.Id,
                 agentId = evaluation.ResolvedAgentId,
                 trapOid,
-                timestamp = new DateTimeOffset(diagnostic.ReceivedAt).ToUnixTimeMilliseconds()
+                trapLabel = ToMibLabel(trapLookup, trapOid),
+                timestamp = new DateTimeOffset(diagnostic.ReceivedAt).ToUnixTimeMilliseconds(),
+                variables = enriched.Varbinds.Select(v => new
+                {
+                    oid = v.Oid,
+                    value = v.Value,
+                    syntax = v.Syntax,
+                    label = v.Label
+                }).ToArray()
             };
             await pubSub.PublishAsync($"evt:snmp-trap:{evaluation.ResolvedAgentId}:{trapOid}", payload, cancellationToken);
         }
@@ -200,6 +208,26 @@ public sealed class TrapEventPublisher(
             matched,
             missing
         }, JsonOptions);
+    }
+
+    private static string? ToMibLabel(Ptlk.RedisSnmp.Contracts.Mib.MibLookupResult? lookup, string? oid)
+    {
+        if (string.IsNullOrWhiteSpace(lookup?.SymbolicName))
+        {
+            return null;
+        }
+
+        var symbolicName = lookup.SymbolicName;
+        if (!string.IsNullOrWhiteSpace(oid)
+            && !string.IsNullOrWhiteSpace(lookup.NumericOid)
+            && oid.StartsWith(lookup.NumericOid + ".", StringComparison.Ordinal))
+        {
+            symbolicName += oid[lookup.NumericOid.Length..];
+        }
+
+        return string.IsNullOrWhiteSpace(lookup.ModuleName)
+            ? symbolicName
+            : $"{lookup.ModuleName}::{symbolicName}";
     }
 
     private sealed record ExpectedTrapObjectSnapshot(int SortOrder, string ObjectSymbol, string? ObjectOid);
