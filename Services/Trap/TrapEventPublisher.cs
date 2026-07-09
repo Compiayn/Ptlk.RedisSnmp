@@ -15,7 +15,8 @@ public sealed class TrapEventPublisher(
     MibLookupService mibLookup,
     IRedisPubSubService pubSub,
     TrapSecurityService security,
-    IOptions<TrapOptions> trapOptions)
+    IOptions<TrapOptions> trapOptions,
+    TrapDiagnosticsRefreshService? diagnosticsRefresh = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -87,6 +88,7 @@ public sealed class TrapEventPublisher(
         };
         db.SnmpTrapLogEntries.Add(diagnostic);
         await db.SaveChangesAsync(cancellationToken);
+        diagnosticsRefresh?.NotifyDiagnosticRecorded(diagnostic.Id);
 
         if (publishResult == TrapPublishResults.Published)
         {

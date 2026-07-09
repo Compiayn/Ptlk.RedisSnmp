@@ -1,8 +1,10 @@
 @page "/trap"
 @rendermode InteractiveServer
+@implements IAsyncDisposable
 @inject LogService Logs
 @inject RuntimeModeService Runtime
 @inject ScreenAlertService ScreenAlerts
+@inject TrapDiagnosticsRefreshService TrapRefresh
 @inject Microsoft.Extensions.Options.IOptions<Ptlk.RedisSnmp.Configuration.TrapOptions> TrapOptions
 
 <div class="page-header">
@@ -10,7 +12,7 @@
         <h1>Trap</h1>
         <p class="page-kicker">Recent trap log entries captured by the Net-SNMP trap receiver.</p>
     </div>
-    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@isLoading">Refresh</button>
+    <button class="btn btn-outline-primary" type="button" @onclick="RequestRefreshAsync" disabled="@isLoading">@(isLoading ? "Refreshing" : "Refresh")</button>
 </div>
 
 <ScreenAlertHost />
@@ -19,7 +21,7 @@
     <div class="row g-3">
         <div class="col-md-3">
             <div class="muted-metadata">Receiver</div>
-            <span class="@StatusBadgeClass(Runtime.Current.TrapStatus.ToString())">@Runtime.Current.TrapStatus</span>
+            <span class="@StatusBadgeClass(runtimeState.TrapStatus.ToString())">@runtimeState.TrapStatus</span>
         </div>
         <div class="col-md-2">
             <div class="muted-metadata">Port</div>
@@ -31,7 +33,7 @@
         </div>
         <div class="col-md-5">
             <div class="muted-metadata">Message</div>
-            <div>@Runtime.Current.TrapMessage</div>
+            <div>@runtimeState.TrapMessage</div>
         </div>
     </div>
 </section>
@@ -39,7 +41,7 @@
 <section class="surface">
     <div class="row g-3">
         <div class="col-md-2">
-            <div class="muted-metadata">Received</div>
+            <div class="muted-metadata">Recent</div>
             <div class="metric-value">@traps.Count</div>
         </div>
         <div class="col-md-2">
@@ -70,7 +72,7 @@
     <div class="muted-metadata mb-3">Snapshot refreshed @lastLoaded.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss").</div>
 }
 
-@if (isLoading)
+@if (isLoading && !hasLoaded)
 {
     <div class="empty-state">Loading trap records...</div>
 }
@@ -98,7 +100,7 @@ else
             <tbody>
             @foreach (var item in traps)
             {
-                <tr>
+                <tr @key="item.Id">
                     <td class="numeric">@item.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
                     <td class="numeric">@item.Id</td>
                     <td><span class="@StatusBadgeClass(item.AgentResolutionResult)">@item.AgentResolutionResult</span></td>
@@ -132,28 +134,213 @@ else
 }
 
 @code {
+    private static readonly TimeSpan RefreshDebounce = TimeSpan.FromMilliseconds(500);
     private IReadOnlyList<SnmpTrapLogEntry> traps = [];
+    private readonly SemaphoreSlim refreshGate = new(1, 1);
+    private readonly object debounceLock = new();
+    private readonly object refreshQueueLock = new();
+    private CancellationTokenSource? pageCancellation;
+    private CancellationTokenSource? debounceCancellation;
+    private IDisposable? trapRefreshSubscription;
+    private RuntimeState runtimeState = default!;
+    private string? lastRefreshAlertMessage;
     private bool isLoading;
+    private bool hasLoaded;
+    private bool disposed;
+    private bool refreshQueued;
     private DateTimeOffset? lastLoaded;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private int TrapWindowSize => Math.Clamp(TrapOptions.Value.BufferLimit, 10, 1000);
 
-    private async Task LoadAsync()
+    protected override async Task OnInitializedAsync()
+    {
+        runtimeState = Runtime.Current;
+        pageCancellation = new CancellationTokenSource();
+        trapRefreshSubscription = TrapRefresh.Subscribe(OnTrapDiagnosticsChanged);
+        Runtime.Changed += OnRuntimeChanged;
+
+        await RefreshSnapshotAsync(pageCancellation.Token);
+    }
+
+    private async Task RequestRefreshAsync()
+    {
+        CancelDebouncedRefresh();
+        await RefreshSnapshotAsync(pageCancellation?.Token ?? CancellationToken.None);
+    }
+
+    private void OnTrapDiagnosticsChanged(TrapDiagnosticsChanged _)
+    {
+        QueueDebouncedRefresh();
+    }
+
+    private void OnRuntimeChanged(RuntimeState state)
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        runtimeState = state;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void QueueDebouncedRefresh()
+    {
+        if (disposed || pageCancellation is null)
+        {
+            return;
+        }
+
+        CancellationTokenSource current;
+        CancellationTokenSource? previous;
+        lock (debounceLock)
+        {
+            previous = debounceCancellation;
+            current = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
+            debounceCancellation = current;
+        }
+
+        previous?.Cancel();
+        _ = RunDebouncedRefreshAsync(current);
+    }
+
+    private async Task RunDebouncedRefreshAsync(CancellationTokenSource refreshCancellation)
     {
         try
         {
+            await Task.Delay(RefreshDebounce, refreshCancellation.Token);
+            await RefreshSnapshotAsync(refreshCancellation.Token);
+        }
+        catch (OperationCanceledException) when (refreshCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            lock (debounceLock)
+            {
+                if (ReferenceEquals(debounceCancellation, refreshCancellation))
+                {
+                    debounceCancellation = null;
+                }
+            }
+
+            refreshCancellation.Dispose();
+        }
+    }
+
+    private async Task RefreshSnapshotAsync(CancellationToken cancellationToken)
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        bool enteredGate;
+        try
+        {
+            enteredGate = await refreshGate.WaitAsync(0, cancellationToken);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        if (!enteredGate)
+        {
+            MarkRefreshQueued();
+            return;
+        }
+
+        try
+        {
             isLoading = true;
-            traps = await Logs.QueryRecentTrapsAsync();
+            if (!disposed)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+
+            traps = await Logs.QueryRecentTrapsAsync(take: TrapWindowSize, cancellationToken: cancellationToken);
             lastLoaded = DateTimeOffset.Now;
+            lastRefreshAlertMessage = null;
+            hasLoaded = true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Trap refresh failed");
+            await ShowRefreshErrorAsync(ex);
         }
         finally
         {
             isLoading = false;
+            refreshGate.Release();
+
+            if (!disposed)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+
+            if (ConsumeRefreshQueued())
+            {
+                QueueDebouncedRefresh();
+            }
         }
+    }
+
+    private async Task ShowRefreshErrorAsync(Exception ex)
+    {
+        if (string.Equals(lastRefreshAlertMessage, ex.Message, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        lastRefreshAlertMessage = ex.Message;
+        await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Trap refresh failed");
+    }
+
+    private void MarkRefreshQueued()
+    {
+        lock (refreshQueueLock)
+        {
+            refreshQueued = true;
+        }
+    }
+
+    private bool ConsumeRefreshQueued()
+    {
+        lock (refreshQueueLock)
+        {
+            var queued = refreshQueued;
+            refreshQueued = false;
+            return queued;
+        }
+    }
+
+    private void CancelDebouncedRefresh()
+    {
+        lock (debounceLock)
+        {
+            debounceCancellation?.Cancel();
+            debounceCancellation = null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true;
+        Runtime.Changed -= OnRuntimeChanged;
+        trapRefreshSubscription?.Dispose();
+        pageCancellation?.Cancel();
+        CancelDebouncedRefresh();
+        var canDisposeGate = await refreshGate.WaitAsync(TimeSpan.FromSeconds(2));
+        if (canDisposeGate)
+        {
+            refreshGate.Release();
+            refreshGate.Dispose();
+        }
+
+        pageCancellation?.Dispose();
     }
 
     private static string StatusBadgeClass(string? status)

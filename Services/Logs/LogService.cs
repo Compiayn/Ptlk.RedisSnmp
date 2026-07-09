@@ -140,7 +140,7 @@ public sealed class LogService(AppDbContext db)
         }
 
         return await q.OrderByDescending(l => l.ReceivedAt)
-            .Take(Math.Clamp(take, 10, 500))
+            .Take(Math.Clamp(take, 10, 1000))
             .ToListAsync(cancellationToken);
     }
 }
