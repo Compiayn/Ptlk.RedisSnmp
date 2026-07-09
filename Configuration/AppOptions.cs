@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Ptlk.RedisSnmp.Contracts.Trap;
 
 namespace Ptlk.RedisSnmp.Configuration;
 
@@ -55,7 +56,8 @@ public sealed class NetSnmpOptions
 public sealed class TrapOptions
 {
     public bool Enabled { get; set; } = true;
-    public int ListenPort { get; set; } = 10162;
+    public int ListenPort { get; set; } = 162;
+    public string PublishMode { get; set; } = TrapPublishModes.Credential;
     public int BufferLimit { get; set; } = 1000;
 }
 
@@ -129,6 +131,7 @@ public static class OptionsRegistration
         services.AddOptions<TrapOptions>()
             .Bind(configuration.GetSection("Trap"))
             .Validate(o => o.ListenPort is > 0 and <= 65535
+                           && TrapPublishModes.IsValid(o.PublishMode)
                            && o.BufferLimit > 0,
                 "Trap options are invalid.")
             .ValidateOnStart();

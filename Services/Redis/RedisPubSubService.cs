@@ -3,9 +3,14 @@ using StackExchange.Redis;
 
 namespace Ptlk.RedisSnmp.Services.Redis;
 
+public interface IRedisPubSubService
+{
+    Task PublishAsync(string channel, object payload, CancellationToken cancellationToken = default);
+}
+
 public sealed class RedisPubSubService(
     RedisConnectionFactory redis,
-    ILogger<RedisPubSubService> logger)
+    ILogger<RedisPubSubService> logger) : IRedisPubSubService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 

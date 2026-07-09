@@ -9,20 +9,50 @@ public sealed class TrapParser(SnmpSourcePathService paths)
     {
         var lines = raw.Replace("\r\n", "\n", StringComparison.Ordinal)
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var source = sourceAddress ?? "unknown";
-        var trapOid = "0";
+        var source = ParseSource(sourceAddress ?? "unknown");
+        var trapOid = "";
+        string? version = null;
+        string? community = null;
+        string? securityName = null;
+        string? securityLevel = null;
+        string? engineId = null;
         var varbinds = new List<SnmpTrapVarbind>();
 
         foreach (var line in lines)
         {
             if (line.StartsWith("source=", StringComparison.OrdinalIgnoreCase))
             {
-                source = line["source=".Length..].Trim();
+                source = ParseSource(line["source=".Length..].Trim());
                 continue;
             }
             if (line.StartsWith("trapOid=", StringComparison.OrdinalIgnoreCase))
             {
                 trapOid = Normalize(line["trapOid=".Length..]);
+                continue;
+            }
+            if (line.StartsWith("version=", StringComparison.OrdinalIgnoreCase))
+            {
+                version = line["version=".Length..].Trim();
+                continue;
+            }
+            if (line.StartsWith("community=", StringComparison.OrdinalIgnoreCase))
+            {
+                community = line["community=".Length..].Trim();
+                continue;
+            }
+            if (line.StartsWith("securityName=", StringComparison.OrdinalIgnoreCase))
+            {
+                securityName = line["securityName=".Length..].Trim();
+                continue;
+            }
+            if (line.StartsWith("securityLevel=", StringComparison.OrdinalIgnoreCase))
+            {
+                securityLevel = line["securityLevel=".Length..].Trim();
+                continue;
+            }
+            if (line.StartsWith("engineId=", StringComparison.OrdinalIgnoreCase))
+            {
+                engineId = line["engineId=".Length..].Trim();
                 continue;
             }
 
@@ -39,11 +69,19 @@ public sealed class TrapParser(SnmpSourcePathService paths)
 
         return new SnmpTrapMessage(
             agentId ?? "unknown",
-            source,
+            source.Address,
             trapOid,
             varbinds,
             DateTimeOffset.UtcNow,
-            raw);
+            raw)
+        {
+            SourcePort = source.Port,
+            Version = version,
+            Community = community,
+            SecurityName = securityName,
+            SecurityLevel = securityLevel,
+            EngineId = engineId
+        };
     }
 
     private SnmpTrapVarbind? ParseVarbind(string line)
@@ -81,5 +119,33 @@ public sealed class TrapParser(SnmpSourcePathService paths)
         {
             return oid.Trim().TrimStart('.');
         }
+    }
+
+    private static (string Address, int? Port) ParseSource(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith("[", StringComparison.Ordinal))
+        {
+            var end = trimmed.IndexOf(']');
+            if (end > 0)
+            {
+                var address = trimmed[1..end];
+                var rest = trimmed[(end + 1)..].TrimStart(':');
+                return (address, int.TryParse(rest, out var port) ? port : null);
+            }
+        }
+
+        var lastColon = trimmed.LastIndexOf(':');
+        if (lastColon > 0 && trimmed.IndexOf(':') == lastColon)
+        {
+            var address = trimmed[..lastColon];
+            var portText = trimmed[(lastColon + 1)..];
+            if (int.TryParse(portText, out var port))
+            {
+                return (address, port);
+            }
+        }
+
+        return (trimmed, null);
     }
 }

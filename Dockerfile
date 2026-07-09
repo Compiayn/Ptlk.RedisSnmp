@@ -17,6 +17,6 @@ WORKDIR /app
 COPY --from=build /app/publish /app
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
-EXPOSE 10162/udp
+EXPOSE 162/udp
 VOLUME ["/data"]
 ENTRYPOINT ["dotnet", "/app/Ptlk.RedisSnmp.dll"]

@@ -50,6 +50,10 @@ public sealed class MibSetService(
         "DESCRIPTION\\s+\"(?<value>(?:[^\"]|\"\")*)\"",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
+    private static readonly Regex NotificationObjectsPattern = new(
+        @"(?ms)\bOBJECTS\s*\{(?<objects>.*?)\}",
+        RegexOptions.Compiled);
+
     private static readonly Regex CommentPattern = new(
         @"--.*$",
         RegexOptions.Compiled | RegexOptions.Multiline);
@@ -420,12 +424,41 @@ public sealed class MibSetService(
         }
 
         var nodes = parsedFiles.SelectMany(f => f.Nodes).ToList();
+        var pendingNotificationObjects = parsedFiles.SelectMany(f => f.NotificationObjects).ToList();
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         await db.MibNodes
             .Where(n => n.MibSetId == mibSetId)
             .ExecuteDeleteAsync(cancellationToken);
 
         db.MibNodes.AddRange(nodes);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var nodeByNotificationOid = nodes
+            .Where(n => n.NodeKind == "NOTIFICATION-TYPE")
+            .GroupBy(n => n.NumericOid, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var oidBySymbol = nodes
+            .Where(n => !string.IsNullOrWhiteSpace(n.SymbolicName))
+            .GroupBy(n => n.SymbolicName!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().NumericOid, StringComparer.OrdinalIgnoreCase);
+        var notificationObjects = new List<MibNotificationObject>();
+        foreach (var pending in pendingNotificationObjects)
+        {
+            if (!nodeByNotificationOid.TryGetValue(pending.NotificationOid, out var notificationNode))
+            {
+                continue;
+            }
+
+            notificationObjects.Add(new MibNotificationObject
+            {
+                NotificationMibNodeId = notificationNode.Id,
+                SortOrder = pending.SortOrder,
+                ObjectSymbol = pending.ObjectSymbol,
+                ObjectOid = pending.ObjectOid ?? oidBySymbol.GetValueOrDefault(pending.ObjectSymbol)
+            });
+        }
+
+        db.MibNotificationObjects.AddRange(notificationObjects);
         foreach (var parsed in parsedFiles)
         {
             if (parsed.File is null)
@@ -479,6 +512,7 @@ public sealed class MibSetService(
                     null,
                     [],
                     [],
+                    [],
                     [$"Base MIB '{relativePath}': {ex.Message}"],
                     []));
             }
@@ -511,6 +545,7 @@ public sealed class MibSetService(
                     "",
                     null,
                     null,
+                    [],
                     [],
                     [],
                     [$"{file.FileName}: {ex.Message}"],
@@ -592,6 +627,7 @@ public sealed class MibSetService(
             : new Dictionary<string, string>(externalSymbols, StringComparer.OrdinalIgnoreCase);
         var pending = definitions.ToList();
         var nodes = new List<MibNode>();
+        var notificationObjects = new List<PendingMibNotificationObject>();
         string? moduleIdentityOid = null;
 
         while (pending.Count > 0)
@@ -628,11 +664,25 @@ public sealed class MibSetService(
                     NumericOid = numericOid,
                     SymbolicName = definition.Symbol,
                     ModuleName = moduleName,
+                    NodeKind = definition.Kind,
                     Syntax = ExtractSingleLine(SyntaxPattern, definition.Body),
                     Access = ExtractSingleLine(AccessPattern, definition.Body),
                     Description = ExtractDescription(definition.Body),
                     Active = false
                 });
+
+                if (definition.Kind.Equals("NOTIFICATION-TYPE", StringComparison.OrdinalIgnoreCase))
+                {
+                    var sortOrder = 0;
+                    foreach (var objectSymbol in ExtractNotificationObjects(definition.Body))
+                    {
+                        notificationObjects.Add(new PendingMibNotificationObject(
+                            numericOid,
+                            ++sortOrder,
+                            objectSymbol,
+                            symbolOids.GetValueOrDefault(objectSymbol)));
+                    }
+                }
 
                 pending.Remove(definition);
                 resolvedThisPass++;
@@ -667,6 +717,7 @@ public sealed class MibSetService(
             moduleIdentityOid,
             imports,
             nodes,
+            notificationObjects,
             errors,
             warnings);
     }
@@ -1146,6 +1197,20 @@ public sealed class MibSetService(
         return match.Success ? match.Groups["value"].Value.Replace("\"\"", "\"", StringComparison.Ordinal).Trim() : null;
     }
 
+    private static IReadOnlyList<string> ExtractNotificationObjects(string body)
+    {
+        var match = NotificationObjectsPattern.Match(body);
+        if (!match.Success)
+        {
+            return [];
+        }
+
+        return match.Groups["objects"].Value
+            .Split([',', ' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToList();
+    }
+
     private static string Sha256(byte[] content)
     {
         var hash = SHA256.HashData(content);
@@ -1172,10 +1237,17 @@ public sealed class MibSetService(
         string? ModuleIdentityOid,
         IReadOnlyList<string> Imports,
         List<MibNode> Nodes,
+        List<PendingMibNotificationObject> NotificationObjects,
         List<string> Errors,
         List<string> Warnings);
 
     private sealed record MibDefinition(string Symbol, string Kind, string Body, string Assignment);
+
+    private sealed record PendingMibNotificationObject(
+        string NotificationOid,
+        int SortOrder,
+        string ObjectSymbol,
+        string? ObjectOid);
 
     private sealed record AssignmentToken(string? Name, int? Number, string? Oid);
 

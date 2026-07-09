@@ -17,6 +17,7 @@ public sealed class SnmpAgentService(
         db.SnmpAgentConfigs
             .AsNoTracking()
             .Include(a => a.CredentialConfig)
+            .Include(a => a.TrapCredentialConfig)
             .Include(a => a.PreferredMibSet)
             .Include(a => a.Points)
             .OrderBy(a => a.AgentId)
@@ -37,6 +38,7 @@ public sealed class SnmpAgentService(
         entity.Port = input.Port;
         entity.SnmpVersion = input.SnmpVersion.Trim();
         entity.CredentialConfigId = input.CredentialConfigId;
+        entity.TrapCredentialConfigId = input.TrapCredentialConfigId;
         entity.PreferredMibSetId = input.PreferredMibSetId;
         entity.TimeoutMs = input.TimeoutMs > 0 ? input.TimeoutMs : runtimeOptions.Value.DefaultTimeoutMs;
         entity.RetryCount = input.RetryCount >= 0 ? input.RetryCount : runtimeOptions.Value.DefaultRetryCount;

@@ -6,6 +6,7 @@ namespace Ptlk.RedisSnmp.Data;
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<SnmpCredentialConfig> SnmpCredentialConfigs => Set<SnmpCredentialConfig>();
+    public DbSet<SnmpTrapCredentialConfig> SnmpTrapCredentialConfigs => Set<SnmpTrapCredentialConfig>();
     public DbSet<SnmpAgentConfig> SnmpAgentConfigs => Set<SnmpAgentConfig>();
     public DbSet<SnmpPointConfig> SnmpPointConfigs => Set<SnmpPointConfig>();
     public DbSet<RedisMapping> RedisMappings => Set<RedisMapping>();
@@ -16,6 +17,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<MibFile> MibFiles => Set<MibFile>();
     public DbSet<MibImportJob> MibImportJobs => Set<MibImportJob>();
     public DbSet<MibNode> MibNodes => Set<MibNode>();
+    public DbSet<MibNotificationObject> MibNotificationObjects => Set<MibNotificationObject>();
     public DbSet<MibSetValidationIssue> MibSetValidationIssues => Set<MibSetValidationIssue>();
     public DbSet<SnmpTrapLogEntry> SnmpTrapLogEntries => Set<SnmpTrapLogEntry>();
     public DbSet<SnmpTrapRuleConfig> SnmpTrapRuleConfigs => Set<SnmpTrapRuleConfig>();
@@ -53,6 +55,22 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(c => c.Description).HasMaxLength(1000);
         });
 
+        modelBuilder.Entity<SnmpTrapCredentialConfig>(entity =>
+        {
+            entity.HasIndex(c => c.Name).IsUnique();
+            entity.Property(c => c.Name).HasMaxLength(160).IsRequired();
+            entity.Property(c => c.Version).HasMaxLength(16).IsRequired();
+            entity.Property(c => c.ProtectedCommunity).HasMaxLength(2000);
+            entity.Property(c => c.SecurityName).HasMaxLength(160);
+            entity.Property(c => c.SecurityLevel).HasMaxLength(32);
+            entity.Property(c => c.AuthProtocol).HasMaxLength(32);
+            entity.Property(c => c.ProtectedAuthPassword).HasMaxLength(2000);
+            entity.Property(c => c.PrivProtocol).HasMaxLength(32);
+            entity.Property(c => c.ProtectedPrivPassword).HasMaxLength(2000);
+            entity.Property(c => c.EngineId).HasMaxLength(160);
+            entity.Property(c => c.Description).HasMaxLength(1000);
+        });
+
         modelBuilder.Entity<SnmpAgentConfig>(entity =>
         {
             entity.HasIndex(a => a.AgentId).IsUnique();
@@ -65,6 +83,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(a => a.CredentialConfig)
                   .WithMany()
                   .HasForeignKey(a => a.CredentialConfigId)
+                  .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(a => a.TrapCredentialConfig)
+                  .WithMany()
+                  .HasForeignKey(a => a.TrapCredentialConfigId)
                   .OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(a => a.PreferredMibSet)
                   .WithMany()
@@ -200,6 +222,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(n => n.NumericOid).HasMaxLength(160).IsRequired();
             entity.Property(n => n.SymbolicName).HasMaxLength(240);
             entity.Property(n => n.ModuleName).HasMaxLength(160);
+            entity.Property(n => n.NodeKind).HasMaxLength(64);
             entity.Property(n => n.Syntax).HasMaxLength(80);
             entity.Property(n => n.Access).HasMaxLength(40);
             entity.Property(n => n.Description).HasMaxLength(4000);
@@ -207,6 +230,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                   .WithMany(f => f.Nodes)
                   .HasForeignKey(n => n.MibFileId)
                   .OnDelete(DeleteBehavior.SetNull);
+            entity.HasMany(n => n.NotificationObjects)
+                  .WithOne(o => o.NotificationMibNode)
+                  .HasForeignKey(o => o.NotificationMibNodeId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MibNotificationObject>(entity =>
+        {
+            entity.HasIndex(o => new { o.NotificationMibNodeId, o.SortOrder }).IsUnique();
+            entity.Property(o => o.ObjectSymbol).HasMaxLength(240).IsRequired();
+            entity.Property(o => o.ObjectOid).HasMaxLength(160);
         });
 
         modelBuilder.Entity<MibSetValidationIssue>(entity =>
@@ -224,13 +258,28 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         modelBuilder.Entity<SnmpTrapLogEntry>(entity =>
         {
             entity.HasIndex(l => l.ReceivedAt);
-            entity.HasIndex(l => new { l.AgentId, l.TrapOid });
-            entity.Property(l => l.AgentId).HasMaxLength(160).IsRequired();
+            entity.HasIndex(l => new { l.ResolvedAgentId, l.ResolvedTrapOid });
+            entity.Property(l => l.AgentId).HasMaxLength(160);
             entity.Property(l => l.SourceAddress).HasMaxLength(255).IsRequired();
-            entity.Property(l => l.TrapOid).HasMaxLength(160).IsRequired();
+            entity.Property(l => l.TrapOid).HasMaxLength(160);
             entity.Property(l => l.VarbindsJson).IsRequired();
             entity.Property(l => l.MibLabelsJson).HasMaxLength(4000);
             entity.Property(l => l.RawPayload).HasMaxLength(8000).IsRequired();
+            entity.Property(l => l.ResolvedPayload).IsRequired();
+            entity.Property(l => l.ExpectedObjects);
+            entity.Property(l => l.ExpectedObjectMatchResult).HasMaxLength(2000);
+            entity.Property(l => l.ResolvedAgentId).HasMaxLength(160);
+            entity.Property(l => l.AgentResolutionResult).HasMaxLength(32).IsRequired();
+            entity.Property(l => l.AgentResolutionReason).HasMaxLength(120).IsRequired();
+            entity.Property(l => l.ResolvedTrapOid).HasMaxLength(160);
+            entity.Property(l => l.ResolvedTrapName).HasMaxLength(240);
+            entity.Property(l => l.ResolvedTrapModule).HasMaxLength(160);
+            entity.Property(l => l.ResolvedTrapDescription).HasMaxLength(4000);
+            entity.Property(l => l.PublishMode).HasMaxLength(32).IsRequired();
+            entity.Property(l => l.CredentialValidationResult).HasMaxLength(32).IsRequired();
+            entity.Property(l => l.CredentialValidationReason).HasMaxLength(120).IsRequired();
+            entity.Property(l => l.PublishResult).HasMaxLength(32).IsRequired();
+            entity.Property(l => l.PublishReason).HasMaxLength(120).IsRequired();
         });
 
         modelBuilder.Entity<SnmpTrapRuleConfig>(entity =>

@@ -25,22 +25,28 @@ public sealed class CsvConfigService(
         "name",
         "version",
         "status",
+        "enabled",
         "agent_id",
         "display_name",
         "host",
         "port",
         "snmp_version",
         "credential_name",
+        "trap_credential_name",
         "preferred_mib_set",
         "security_name",
         "security_level",
         "auth_protocol",
         "priv_protocol",
+        "engine_id",
         "protected_community",
         "protected_read_community",
         "protected_write_community",
         "protected_auth_password",
         "protected_priv_password",
+        "protected_trap_community",
+        "protected_trap_auth_password",
+        "protected_trap_priv_password",
         "numeric_oid",
         "value_type",
         "access",
@@ -89,9 +95,28 @@ public sealed class CsvConfigService(
             builder.AppendLine(Csv(row));
         }
 
+        foreach (var credential in await db.SnmpTrapCredentialConfigs.AsNoTracking().OrderBy(c => c.Name).ToListAsync(cancellationToken))
+        {
+            var row = NewExportRow("trap_credential");
+            Set(row, "name", credential.Name);
+            Set(row, "enabled", credential.Enabled ? "true" : "false");
+            Set(row, "version", credential.Version);
+            Set(row, "security_name", credential.SecurityName ?? "");
+            Set(row, "security_level", credential.SecurityLevel ?? "");
+            Set(row, "auth_protocol", credential.AuthProtocol ?? "");
+            Set(row, "priv_protocol", credential.PrivProtocol ?? "");
+            Set(row, "engine_id", credential.EngineId ?? "");
+            Set(row, "protected_trap_community", credential.ProtectedCommunity ?? "");
+            Set(row, "protected_trap_auth_password", credential.ProtectedAuthPassword ?? "");
+            Set(row, "protected_trap_priv_password", credential.ProtectedPrivPassword ?? "");
+            Set(row, "description", credential.Description ?? "");
+            builder.AppendLine(Csv(row));
+        }
+
         foreach (var agent in await db.SnmpAgentConfigs
                      .AsNoTracking()
                      .Include(a => a.CredentialConfig)
+                     .Include(a => a.TrapCredentialConfig)
                      .Include(a => a.PreferredMibSet)
                      .OrderBy(a => a.AgentId)
                      .ToListAsync(cancellationToken))
@@ -103,6 +128,7 @@ public sealed class CsvConfigService(
             Set(row, "port", agent.Port.ToString());
             Set(row, "snmp_version", agent.SnmpVersion);
             Set(row, "credential_name", agent.CredentialConfig?.Name ?? "");
+            Set(row, "trap_credential_name", agent.TrapCredentialConfig?.Name ?? "");
             Set(row, "preferred_mib_set", agent.PreferredMibSet?.Name ?? "");
             Set(row, "description", agent.Description ?? "");
             builder.AppendLine(Csv(row));
@@ -182,6 +208,9 @@ public sealed class CsvConfigService(
             await db.SaveChangesAsync(cancellationToken);
 
             imported += await ApplyCredentialsAsync(rows.Where(IsKind("credential")), errors, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+
+            imported += await ApplyTrapCredentialsAsync(rows.Where(IsKind("trap_credential")), errors, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
 
             imported += await ApplyAgentsAsync(rows.Where(IsKind("agent")), errors, cancellationToken);
@@ -303,6 +332,54 @@ public sealed class CsvConfigService(
         return imported;
     }
 
+    private async Task<int> ApplyTrapCredentialsAsync(
+        IEnumerable<ImportRow> rows,
+        List<string> errors,
+        CancellationToken cancellationToken)
+    {
+        var imported = 0;
+        foreach (var row in rows)
+        {
+            try
+            {
+                var name = row.Get("name");
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    throw new InvalidOperationException("Trap credential name is required.");
+                }
+
+                var credential = await db.SnmpTrapCredentialConfigs.FirstOrDefaultAsync(c => c.Name == name, cancellationToken)
+                                 ?? db.SnmpTrapCredentialConfigs.Local.FirstOrDefault(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                                 ?? new SnmpTrapCredentialConfig();
+                credential.Name = name.Trim();
+                credential.Enabled = !row.HasField("enabled") || !bool.TryParse(row.Get("enabled"), out var enabled) || enabled;
+                credential.Version = EmptyDefault(row.Get("version"), SnmpVersions.V2C);
+                credential.SecurityName = EmptyToNull(row.Get("security_name"));
+                credential.SecurityLevel = EmptyToNull(row.Get("security_level"));
+                credential.AuthProtocol = EmptyToNull(row.Get("auth_protocol"));
+                credential.PrivProtocol = EmptyToNull(row.Get("priv_protocol"));
+                credential.EngineId = EmptyToNull(row.Get("engine_id"));
+                SetProtectedSecretIfPresent(row, "protected_trap_community", value => credential.ProtectedCommunity = value);
+                SetProtectedSecretIfPresent(row, "protected_trap_auth_password", value => credential.ProtectedAuthPassword = value);
+                SetProtectedSecretIfPresent(row, "protected_trap_priv_password", value => credential.ProtectedPrivPassword = value);
+                credential.Description = EmptyToNull(row.Get("description"));
+
+                if (credential.Id == 0 && db.Entry(credential).State == EntityState.Detached)
+                {
+                    db.SnmpTrapCredentialConfigs.Add(credential);
+                }
+
+                imported++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Line {row.Line}: {ex.Message}");
+            }
+        }
+
+        return imported;
+    }
+
     private async Task<int> ApplyAgentsAsync(
         IEnumerable<ImportRow> rows,
         List<string> errors,
@@ -334,6 +411,10 @@ public sealed class CsvConfigService(
                 if (row.HasField("credential_name"))
                 {
                     agent.CredentialConfigId = await ResolveCredentialConfigIdAsync(row.Get("credential_name"), cancellationToken);
+                }
+                if (row.HasField("trap_credential_name"))
+                {
+                    agent.TrapCredentialConfigId = await ResolveTrapCredentialConfigIdAsync(row.Get("trap_credential_name"), cancellationToken);
                 }
                 agent.PreferredMibSetId = await ResolveMibSetIdAsync(row.Get("preferred_mib_set"), cancellationToken);
                 agent.Description = EmptyToNull(row.Get("description"));
@@ -510,6 +591,28 @@ public sealed class CsvConfigService(
             .Select(c => (int?)c.Id)
             .FirstOrDefaultAsync(cancellationToken);
         return id ?? throw new InvalidOperationException($"Credential '{value}' was not found.");
+    }
+
+    private async Task<int?> ResolveTrapCredentialConfigIdAsync(string credentialName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(credentialName))
+        {
+            return null;
+        }
+
+        var value = credentialName.Trim();
+        var local = db.SnmpTrapCredentialConfigs.Local.FirstOrDefault(c => c.Name.Equals(value, StringComparison.OrdinalIgnoreCase));
+        if (local is not null)
+        {
+            return local.Id;
+        }
+
+        var id = await db.SnmpTrapCredentialConfigs
+            .AsNoTracking()
+            .Where(c => c.Name == value)
+            .Select(c => (int?)c.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        return id ?? throw new InvalidOperationException($"Trap credential '{value}' was not found.");
     }
 
     private async Task<int?> ResolveMibSetIdAsync(string nameOrId, CancellationToken cancellationToken)

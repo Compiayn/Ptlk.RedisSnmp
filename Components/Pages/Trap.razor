@@ -3,6 +3,7 @@
 @inject LogService Logs
 @inject RuntimeModeService Runtime
 @inject ScreenAlertService ScreenAlerts
+@inject Microsoft.Extensions.Options.IOptions<Ptlk.RedisSnmp.Configuration.TrapOptions> TrapOptions
 
 <div class="page-header">
     <div>
@@ -20,9 +21,46 @@
             <div class="muted-metadata">Receiver</div>
             <span class="@StatusBadgeClass(Runtime.Current.TrapStatus.ToString())">@Runtime.Current.TrapStatus</span>
         </div>
-        <div class="col-md-9">
+        <div class="col-md-2">
+            <div class="muted-metadata">Port</div>
+            <div>@TrapOptions.Value.ListenPort/udp</div>
+        </div>
+        <div class="col-md-2">
+            <div class="muted-metadata">Publish mode</div>
+            <div>@TrapPublishModes.Normalize(TrapOptions.Value.PublishMode)</div>
+        </div>
+        <div class="col-md-5">
             <div class="muted-metadata">Message</div>
             <div>@Runtime.Current.TrapMessage</div>
+        </div>
+    </div>
+</section>
+
+<section class="surface">
+    <div class="row g-3">
+        <div class="col-md-2">
+            <div class="muted-metadata">Received</div>
+            <div class="metric-value">@traps.Count</div>
+        </div>
+        <div class="col-md-2">
+            <div class="muted-metadata">Published</div>
+            <div class="metric-value">@traps.Count(t => t.PublishResult == TrapPublishResults.Published)</div>
+        </div>
+        <div class="col-md-2">
+            <div class="muted-metadata">Skipped</div>
+            <div class="metric-value">@traps.Count(t => t.PublishResult == TrapPublishResults.Skipped)</div>
+        </div>
+        <div class="col-md-2">
+            <div class="muted-metadata">Credential accepted</div>
+            <div class="metric-value">@traps.Count(t => t.CredentialValidationResult == TrapCredentialValidationResults.Accepted)</div>
+        </div>
+        <div class="col-md-2">
+            <div class="muted-metadata">Credential rejected</div>
+            <div class="metric-value">@traps.Count(t => t.CredentialValidationResult == TrapCredentialValidationResults.Rejected)</div>
+        </div>
+        <div class="col-md-2">
+            <div class="muted-metadata">Unresolved agent</div>
+            <div class="metric-value">@traps.Count(t => t.AgentResolutionResult == TrapAgentResolutionResults.Unresolved)</div>
         </div>
     </div>
 </section>
@@ -47,9 +85,13 @@ else
             <thead>
                 <tr>
                     <th class="numeric">Received</th>
+                    <th>ID</th>
+                    <th>Agent resolution</th>
                     <th>Agent</th>
                     <th>Source</th>
                     <th>Trap OID</th>
+                    <th>Credential</th>
+                    <th>Publish</th>
                     <th>Payload</th>
                 </tr>
             </thead>
@@ -58,10 +100,30 @@ else
             {
                 <tr>
                     <td class="numeric">@item.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
-                    <td>@item.AgentId</td>
+                    <td class="numeric">@item.Id</td>
+                    <td><span class="@StatusBadgeClass(item.AgentResolutionResult)">@item.AgentResolutionResult</span></td>
+                    <td>@(item.ResolvedAgentId ?? "-")</td>
                     <td>@item.SourceAddress</td>
-                    <td><code>@item.TrapOid</code></td>
-                    <td class="code-cell"><code>@item.VarbindsJson</code></td>
+                    <td><code>@(item.ResolvedTrapOid ?? "-")</code></td>
+                    <td><span class="@StatusBadgeClass(item.CredentialValidationResult)">@item.CredentialValidationResult</span></td>
+                    <td>
+                        <span class="@StatusBadgeClass(item.PublishResult)">@item.PublishResult</span>
+                        <small>@item.PublishReason</small>
+                    </td>
+                    <td class="code-cell">
+                        <details>
+                            <summary>Details</summary>
+                            <div><strong>Raw</strong></div>
+                            <pre>@item.RawPayload</pre>
+                            <div><strong>Resolved</strong></div>
+                            <pre>@item.ResolvedPayload</pre>
+                            @if (!string.IsNullOrWhiteSpace(item.ExpectedObjects))
+                            {
+                                <div><strong>Expected objects</strong></div>
+                                <pre>@item.ExpectedObjects</pre>
+                            }
+                        </details>
+                    </td>
                 </tr>
             }
             </tbody>
@@ -100,8 +162,10 @@ else
         return normalized switch
         {
             "normal" or "good" => "status-badge success",
+            "resolved" or "accepted" or "published" => "status-badge success",
             "starting" => "status-badge warning",
-            "degraded" or "bad" or "failed" or "error" => "status-badge danger",
+            "degraded" or "bad" or "failed" or "error" or "rejected" => "status-badge danger",
+            "skipped" or "unresolved" or "ambiguous" or "disabled" or "notconfigured" or "notapplicable" => "status-badge warning",
             _ => "status-badge neutral"
         };
     }

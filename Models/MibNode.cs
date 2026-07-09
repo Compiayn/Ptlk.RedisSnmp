@@ -11,10 +11,12 @@ public sealed class MibNode
     public string NumericOid { get; set; } = "";
     public string? SymbolicName { get; set; }
     public string? ModuleName { get; set; }
+    public string? NodeKind { get; set; }
     public string? Syntax { get; set; }
     public string? Access { get; set; }
     public string? Description { get; set; }
     public bool Active { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public List<MibNotificationObject> NotificationObjects { get; set; } = [];
 }

@@ -56,6 +56,7 @@ public sealed class MibImportService(
                     NumericOid = paths.NormalizeNumericOid(parts[0]),
                     SymbolicName = EmptyToNull(parts.ElementAtOrDefault(1)),
                     ModuleName = EmptyToNull(parts.ElementAtOrDefault(2)),
+                    NodeKind = EmptyToNull(parts.ElementAtOrDefault(6)),
                     Syntax = EmptyToNull(parts.ElementAtOrDefault(3)),
                     Access = EmptyToNull(parts.ElementAtOrDefault(4)),
                     Description = EmptyToNull(parts.ElementAtOrDefault(5)),

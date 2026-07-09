@@ -1,6 +1,7 @@
 @page "/agent-link"
 @rendermode InteractiveServer
 @inject SnmpCredentialService Credentials
+@inject SnmpTrapCredentialService TrapCredentials
 @inject SnmpAgentService Agents
 @inject SnmpPointService Points
 @inject SnmpClientService SnmpClient
@@ -66,6 +67,54 @@ else
 
 <div class="toolbar">
     <div>
+        <h2 class="toolbar-title">Trap Credentials</h2>
+        <div class="muted-metadata">Trap sender validation is configured separately from polling and write credentials.</div>
+    </div>
+    <button class="btn btn-primary" type="button" @onclick="() => OpenTrapCredentialDialog()">Add Trap Credential</button>
+</div>
+
+@if (trapCredentials.Count == 0)
+{
+    <div class="empty-state">No trap credentials are configured.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Version</th>
+                    <th>Status</th>
+                    <th>Security</th>
+                    <th>Description</th>
+                    <th class="numeric">Updated</th>
+                    <th class="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var item in trapCredentials)
+            {
+                <tr>
+                    <td>@item.Name</td>
+                    <td><span class="status-badge neutral">@item.Version</span></td>
+                    <td><span class="@StatusBadgeClass(item.Enabled ? "normal" : "disabled")">@(item.Enabled ? "enabled" : "disabled")</span></td>
+                    <td>@TrapSecuritySummary(item)</td>
+                    <td>@(item.Description ?? "-")</td>
+                    <td class="numeric">@FormatDate(item.UpdatedAt)</td>
+                    <td class="actions">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenTrapCredentialDialog(item)">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenTrapCredentialDeleteDialog(item)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+<div class="toolbar">
+    <div>
         <h2 class="toolbar-title">Agents</h2>
         <div class="muted-metadata">Connection status is evaluated by runtime polling, not by this configuration grid.</div>
     </div>
@@ -86,6 +135,7 @@ else
                     <th>Display name</th>
                     <th>Endpoint</th>
                     <th>Credential</th>
+                    <th>Trap credential</th>
                     <th>Preferred MIB</th>
                     <th>Status</th>
                     <th class="numeric">Poll ms</th>
@@ -101,6 +151,7 @@ else
                     <td>@item.DisplayName</td>
                     <td>@item.Host:@item.Port</td>
                     <td>@(item.CredentialConfig?.Name ?? "-")</td>
+                    <td>@(item.TrapCredentialConfig?.Name ?? "-")</td>
                     <td>@MibSetName(item.PreferredMibSetId)</td>
                     <td><span class="@StatusBadgeClass(item.Enabled ? "normal" : "disabled")">@(item.Enabled ? "enabled" : "disabled")</span></td>
                     <td class="numeric">@item.PollingRateMs</td>
@@ -200,6 +251,104 @@ else
     </div>
 }
 
+@if (trapCredentialDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseTrapCredentialDialog"></div>
+    <div class="dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@((trapCredential.Id > 0) ? "Edit Trap Credential" : "Add Trap Credential")</h2>
+                <div class="muted-metadata">Trap secret fields are write-only.</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseTrapCredentialDialog"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="trapCredential.Name" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">SNMP version</label>
+                    <select class="form-select" @bind="trapCredential.Version">
+                        <option value="@SnmpVersions.V1">v1</option>
+                        <option value="@SnmpVersions.V2C">v2c</option>
+                        <option value="@SnmpVersions.V3">v3</option>
+                    </select>
+                </div>
+                <div class="col-12">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" id="trap-credential-enabled" type="checkbox" @bind="trapCredential.Enabled" />
+                        <label class="form-check-label" for="trap-credential-enabled">Enabled</label>
+                    </div>
+                </div>
+                @if (trapCredential.Version == SnmpVersions.V1 || trapCredential.Version == SnmpVersions.V2C)
+                {
+                    <div class="col-12">
+                        <label class="form-label">Trap community</label>
+                        <input class="form-control" type="password" @bind="trapCommunity" autocomplete="new-password" />
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" id="trap-community-clear" type="checkbox" @bind="clearTrapCommunity" />
+                            <label class="form-check-label" for="trap-community-clear">Clear stored community</label>
+                        </div>
+                    </div>
+                }
+                @if (trapCredential.Version == SnmpVersions.V3)
+                {
+                    <div class="col-md-6">
+                        <label class="form-label">Security name</label>
+                        <input class="form-control" @bind="trapCredential.SecurityName" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Security level</label>
+                        <select class="form-select" @bind="trapCredential.SecurityLevel">
+                            <option value="@SnmpSecurityLevels.NoAuthNoPriv">noAuthNoPriv</option>
+                            <option value="@SnmpSecurityLevels.AuthNoPriv">authNoPriv</option>
+                            <option value="@SnmpSecurityLevels.AuthPriv">authPriv</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Auth protocol</label>
+                        <input class="form-control" @bind="trapCredential.AuthProtocol" placeholder="SHA" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Auth password</label>
+                        <input class="form-control" type="password" @bind="trapAuthPassword" autocomplete="new-password" />
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" id="trap-auth-clear" type="checkbox" @bind="clearTrapAuthPassword" />
+                            <label class="form-check-label" for="trap-auth-clear">Clear stored auth password</label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Privacy protocol</label>
+                        <input class="form-control" @bind="trapCredential.PrivProtocol" placeholder="AES" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Privacy password</label>
+                        <input class="form-control" type="password" @bind="trapPrivPassword" autocomplete="new-password" />
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" id="trap-priv-clear" type="checkbox" @bind="clearTrapPrivPassword" />
+                            <label class="form-check-label" for="trap-priv-clear">Clear stored privacy password</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Engine ID</label>
+                        <input class="form-control" @bind="trapCredential.EngineId" />
+                    </div>
+                }
+                <div class="col-12">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="2" @bind="trapCredential.Description"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseTrapCredentialDialog">Cancel</button>
+            <button class="btn btn-primary" type="button" @onclick="SaveTrapCredentialAsync">Save</button>
+        </div>
+    </div>
+}
+
 @if (agentDialogOpen)
 {
     <div class="dialog-backdrop" @onclick="CloseAgentDialog"></div>
@@ -226,6 +375,16 @@ else
                     <select class="form-select" @bind="agent.CredentialConfigId">
                         <option value="">No credential</option>
                         @foreach (var item in credentials)
+                        {
+                            <option value="@item.Id">@item.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Trap credential</label>
+                    <select class="form-select" @bind="agent.TrapCredentialConfigId">
+                        <option value="">No trap credential</option>
+                        @foreach (var item in trapCredentials)
                         {
                             <option value="@item.Id">@item.Name</option>
                         }
@@ -667,11 +826,13 @@ else
     private const int DefaultWalkOperationTimeoutMs = 5000;
 
     private List<SnmpCredentialConfig> credentials = [];
+    private List<SnmpTrapCredentialConfig> trapCredentials = [];
     private List<SnmpAgentConfig> agents = [];
     private List<SnmpPointConfig> points = [];
     private List<MibSetOption> mibSetOptions = [];
 
     private SnmpCredentialConfig credential = NewCredential();
+    private SnmpTrapCredentialConfig trapCredential = NewTrapCredential();
     private SnmpAgentConfig agent = NewAgent();
     private SnmpPointConfig point = NewPoint();
 
@@ -679,7 +840,14 @@ else
     private string? writeCommunity;
     private string? authPassword;
     private string? privPassword;
+    private string? trapCommunity;
+    private string? trapAuthPassword;
+    private string? trapPrivPassword;
+    private bool clearTrapCommunity;
+    private bool clearTrapAuthPassword;
+    private bool clearTrapPrivPassword;
     private bool credentialDialogOpen;
+    private bool trapCredentialDialogOpen;
     private bool agentDialogOpen;
     private bool pointDialogOpen;
     private bool walkDialogOpen;
@@ -724,6 +892,7 @@ else
         try
         {
             credentials = await Credentials.ListAsync();
+            trapCredentials = await TrapCredentials.ListAsync();
             mibSetOptions = await MibSets.ListOptionsAsync();
             agents = await Agents.ListAsync();
             points = await Points.ListAsync();
@@ -745,6 +914,20 @@ else
     }
 
     private void CloseCredentialDialog() => credentialDialogOpen = false;
+
+    private void OpenTrapCredentialDialog(SnmpTrapCredentialConfig? item = null)
+    {
+        trapCredential = item is null ? NewTrapCredential() : CopyTrapCredential(item);
+        trapCommunity = null;
+        trapAuthPassword = null;
+        trapPrivPassword = null;
+        clearTrapCommunity = false;
+        clearTrapAuthPassword = false;
+        clearTrapPrivPassword = false;
+        trapCredentialDialogOpen = true;
+    }
+
+    private void CloseTrapCredentialDialog() => trapCredentialDialogOpen = false;
 
     private void OpenAgentDialog(SnmpAgentConfig? item = null)
     {
@@ -1058,6 +1241,29 @@ else
         }
     }
 
+    private async Task SaveTrapCredentialAsync()
+    {
+        try
+        {
+            await TrapCredentials.CreateOrUpdateAsync(
+                trapCredential,
+                new SnmpTrapCredentialSecrets(
+                    trapCommunity,
+                    trapAuthPassword,
+                    trapPrivPassword,
+                    clearTrapCommunity,
+                    clearTrapAuthPassword,
+                    clearTrapPrivPassword));
+            trapCredentialDialogOpen = false;
+            SetMessage("Trap credential saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMessage(ex.Message, isError: true);
+        }
+    }
+
     private async Task SaveAgentAsync()
     {
         try
@@ -1105,6 +1311,9 @@ else
     private void OpenCredentialDeleteDialog(SnmpCredentialConfig item) =>
         OpenDeleteDialog("credential", item.Id, item.Name);
 
+    private void OpenTrapCredentialDeleteDialog(SnmpTrapCredentialConfig item) =>
+        OpenDeleteDialog("trap credential", item.Id, item.Name);
+
     private void OpenAgentDeleteDialog(SnmpAgentConfig item) =>
         OpenDeleteDialog("agent", item.Id, item.AgentId);
 
@@ -1135,6 +1344,9 @@ else
             {
                 case "credential":
                     await Credentials.DeleteAsync(deleteId);
+                    break;
+                case "trap credential":
+                    await TrapCredentials.DeleteAsync(deleteId);
                     break;
                 case "agent":
                     await Agents.DeleteAsync(deleteId);
@@ -1185,6 +1397,9 @@ else
     private static SnmpCredentialConfig NewCredential() =>
         new() { Version = SnmpVersions.V2C, SecurityLevel = SnmpSecurityLevels.NoAuthNoPriv };
 
+    private static SnmpTrapCredentialConfig NewTrapCredential() =>
+        new() { Version = SnmpVersions.V2C, SecurityLevel = SnmpSecurityLevels.NoAuthNoPriv, Enabled = true };
+
     private static SnmpAgentConfig NewAgent() =>
         new() { Port = 161, SnmpVersion = SnmpVersions.V2C, TimeoutMs = 5000, RetryCount = 1, PollingRateMs = 1000, Enabled = true };
 
@@ -1204,6 +1419,21 @@ else
             Description = source.Description
         };
 
+    private static SnmpTrapCredentialConfig CopyTrapCredential(SnmpTrapCredentialConfig source) =>
+        new()
+        {
+            Id = source.Id,
+            Name = source.Name,
+            Enabled = source.Enabled,
+            Version = source.Version,
+            SecurityName = source.SecurityName,
+            SecurityLevel = source.SecurityLevel,
+            AuthProtocol = source.AuthProtocol,
+            PrivProtocol = source.PrivProtocol,
+            EngineId = source.EngineId,
+            Description = source.Description
+        };
+
     private static SnmpAgentConfig CopyAgent(SnmpAgentConfig source) =>
         new()
         {
@@ -1214,6 +1444,7 @@ else
             Port = source.Port,
             SnmpVersion = source.SnmpVersion,
             CredentialConfigId = source.CredentialConfigId,
+            TrapCredentialConfigId = source.TrapCredentialConfigId,
             PreferredMibSetId = source.PreferredMibSetId,
             TimeoutMs = source.TimeoutMs,
             RetryCount = source.RetryCount,
@@ -1244,6 +1475,18 @@ else
         if (item.Version != SnmpVersions.V3)
         {
             return "read/write community";
+        }
+
+        return string.IsNullOrWhiteSpace(item.SecurityLevel)
+            ? SnmpSecurityLevels.NoAuthNoPriv
+            : item.SecurityLevel;
+    }
+
+    private static string TrapSecuritySummary(SnmpTrapCredentialConfig item)
+    {
+        if (item.Version != SnmpVersions.V3)
+        {
+            return "trap community";
         }
 
         return string.IsNullOrWhiteSpace(item.SecurityLevel)

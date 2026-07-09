@@ -20,7 +20,7 @@ public sealed class MibExportService(AppDbContext db)
         builder.AppendLine("-- Generated project MIB metadata snapshot.");
         foreach (var node in nodes)
         {
-            builder.AppendLine($"-- {node.NumericOid} {node.SymbolicName ?? "-"} {node.Syntax ?? "-"} {node.Access ?? "-"}");
+            builder.AppendLine($"-- {node.NumericOid} {node.SymbolicName ?? "-"} {node.NodeKind ?? "-"} {node.Syntax ?? "-"} {node.Access ?? "-"}");
         }
         builder.AppendLine("END");
 
