@@ -7,6 +7,7 @@ using Ptlk.RedisSnmp.Contracts.Redis;
 using Ptlk.RedisSnmp.Contracts.Snmp;
 using Ptlk.RedisSnmp.Data;
 using Ptlk.RedisSnmp.Models;
+using Ptlk.RedisSnmp.Services.Expressions;
 using Ptlk.RedisSnmp.Services.Logs;
 using Ptlk.RedisSnmp.Services.Redis;
 using Ptlk.RedisSnmp.Services.Snmp;
@@ -18,8 +19,8 @@ public sealed record CommandDispatchResult(string Status, string Message, string
 public sealed record AcceptedWriteCommand(
     DeviceWriteCommandContract Command,
     RedisMapping Mapping,
-    SnmpAgentConfig Agent,
-    SnmpPointConfig Point,
+    SnmpAgentConfig? Agent,
+    SnmpPointConfig? Point,
     string RequestedPayload);
 
 public sealed class CommandExecutionService(
@@ -58,12 +59,15 @@ public sealed class CommandExecutionService(
             return new CommandDispatchResult("ignored", "No local mapping.", command.CommandId);
         }
 
-        if (!mapping.SourcePath.StartsWith("snmp:", StringComparison.OrdinalIgnoreCase))
+        var sourceIsSnmp = mapping.SourcePath.StartsWith("snmp:", StringComparison.OrdinalIgnoreCase);
+        var sourceIsExpression = mapping.SourcePath.StartsWith("exp:", StringComparison.OrdinalIgnoreCase);
+        var sourceIsRedis = mapping.SourcePath.StartsWith("rds:", StringComparison.OrdinalIgnoreCase);
+        if (!sourceIsSnmp && !sourceIsExpression && !sourceIsRedis)
         {
-            return await RejectAsync(command, requestedPayload, "unsupported_source", $"SourcePath '{mapping.SourcePath}' is not an SNMP point.", cancellationToken);
+            return await RejectAsync(command, requestedPayload, "unsupported_source", $"SourcePath '{mapping.SourcePath}' is not a writable source.", cancellationToken);
         }
 
-        if (!await ownership.EnsureOwnedAsync(mapping.SourcePath, mapping.RedisKey, cancellationToken))
+        if (sourceIsSnmp && !await ownership.EnsureOwnedAsync(mapping.SourcePath, mapping.RedisKey, cancellationToken))
         {
             await log.AddSystemAsync(
                 "Command",
@@ -74,20 +78,27 @@ public sealed class CommandExecutionService(
             return new CommandDispatchResult("ignored", "Not owned by this converter.", command.CommandId);
         }
 
-        var point = await db.SnmpPointConfigs
-            .AsNoTracking()
-            .Include(p => p.AgentConfig)
-            .ThenInclude(a => a!.CredentialConfig)
-            .FirstOrDefaultAsync(p => p.SourcePath == mapping.SourcePath, cancellationToken);
-
-        if (point?.AgentConfig is null)
+        SnmpPointConfig? point = null;
+        SnmpAgentConfig? agent = null;
+        if (sourceIsSnmp)
         {
-            return await RejectAsync(command, requestedPayload, "missing_point", $"No SNMP point exists for {mapping.SourcePath}.", cancellationToken);
-        }
+            point = await db.SnmpPointConfigs
+                .AsNoTracking()
+                .Include(p => p.AgentConfig)
+                .ThenInclude(a => a!.CredentialConfig)
+                .FirstOrDefaultAsync(p => p.SourcePath == mapping.SourcePath, cancellationToken);
 
-        if (!SnmpAccessModes.CanWrite(point.Access))
-        {
-            return await RejectAsync(command, requestedPayload, "set_disabled", $"SNMP access does not allow Set for {mapping.SourcePath}.", cancellationToken);
+            if (point?.AgentConfig is null)
+            {
+                return await RejectAsync(command, requestedPayload, "missing_point", $"No SNMP point exists for {mapping.SourcePath}.", cancellationToken);
+            }
+
+            if (!SnmpAccessModes.CanWrite(point.Access))
+            {
+                return await RejectAsync(command, requestedPayload, "set_disabled", $"SNMP access does not allow Set for {mapping.SourcePath}.", cancellationToken);
+            }
+
+            agent = point.AgentConfig;
         }
 
         var existing = await db.CommandExecutions
@@ -126,17 +137,37 @@ public sealed class CommandExecutionService(
         });
         await db.SaveChangesAsync(cancellationToken);
 
-        var accepted = new AcceptedWriteCommand(command, mapping, point.AgentConfig, point, requestedPayload);
-        var set = await snmp.SetAsync(point.AgentConfig, point.AgentConfig.CredentialConfig, point, command.ValueAsString(), command.CommandId, cancellationToken);
+        var accepted = new AcceptedWriteCommand(command, mapping, agent, point, requestedPayload);
+
+        if (sourceIsExpression)
+        {
+            var expressions = scope.ServiceProvider.GetRequiredService<ExpressionRuntimeService>();
+            var expressionResult = await expressions.ExecuteWriteAsync(accepted, cancellationToken);
+            if (expressionResult.Status == "failed")
+            {
+                return await FailAcceptedAsync(command, "expression_write_failed", expressionResult.Message, cancellationToken);
+            }
+
+            return expressionResult;
+        }
+
+        if (sourceIsRedis)
+        {
+            return await CompleteAsync(accepted, cancellationToken);
+        }
+
+        var snmpPoint = point ?? throw new InvalidOperationException("SNMP point was not loaded.");
+        var snmpAgent = agent ?? throw new InvalidOperationException("SNMP agent was not loaded.");
+        var set = await snmp.SetAsync(snmpAgent, snmpAgent.CredentialConfig, snmpPoint, command.ValueAsString(), command.CommandId, cancellationToken);
         if (!set.Success)
         {
             return await FailAcceptedAsync(command, set.ErrorCode ?? SnmpOperationStatus.Failed, set.ErrorMessage ?? "SNMP Set failed.", cancellationToken);
         }
 
         cache.Set(new SnmpCachedValue(
-            point.SourcePath,
-            point.AgentConfig.AgentId,
-            point.NumericOid,
+            snmpPoint.SourcePath,
+            snmpAgent.AgentId,
+            snmpPoint.NumericOid,
             set.Value ?? command.ValueAsString(),
             SnmpQuality.Good,
             DateTimeOffset.UtcNow,
@@ -202,10 +233,10 @@ public sealed class CommandExecutionService(
         return await FailBeforeExecutionAsync(command, requestedPayload, errorCode, errorMessage, cancellationToken);
     }
 
-    private async Task<CommandDispatchResult> CompleteAsync(
+    public async Task<CommandDispatchResult> CompleteAsync(
         AcceptedWriteCommand accepted,
-        string actualValue,
-        CancellationToken cancellationToken)
+        string? actualValueOverride,
+        CancellationToken cancellationToken = default)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -215,6 +246,7 @@ public sealed class CommandExecutionService(
 
         try
         {
+            var actualValue = actualValueOverride ?? accepted.Command.ValueAsString();
             var updated = await pointState.UpdateDynamicFieldsAsync(
                 accepted.Mapping,
                 actualValue,
@@ -229,7 +261,7 @@ public sealed class CommandExecutionService(
                 CommandId: accepted.Command.CommandId,
                 Key: accepted.Mapping.RedisKey,
                 Success: true,
-                ActualValue: ToJsonElement(actualValue),
+                ActualValue: actualValueOverride is null ? accepted.Command.Value : ToJsonElement(actualValueOverride),
                 Version: updated.Version,
                 ErrorCode: null,
                 ErrorMessage: null,
@@ -242,12 +274,22 @@ public sealed class CommandExecutionService(
 
             return new CommandDispatchResult("completed", "Command completed.", accepted.Command.CommandId);
         }
+        catch (RedisPointUpdateException ex)
+        {
+            logger.LogWarning(ex, "Command {CommandId} failed during Redis output update", accepted.Command.CommandId);
+            return await FailAcceptedAsync(accepted.Command, ex.Status, ex.Message, cancellationToken);
+        }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Command {CommandId} failed during Redis output update", accepted.Command.CommandId);
             return await FailAcceptedAsync(accepted.Command, "redis_output_failed", ex.Message, cancellationToken);
         }
     }
+
+    public Task<CommandDispatchResult> CompleteAsync(
+        AcceptedWriteCommand accepted,
+        CancellationToken cancellationToken = default) =>
+        CompleteAsync(accepted, actualValueOverride: null, cancellationToken);
 
     private async Task<CommandDispatchResult> FailBeforeExecutionAsync(
         DeviceWriteCommandContract command,

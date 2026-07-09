@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Ptlk.RedisSnmp.Models;
+using Ptlk.RedisSnmp.Services.Expressions;
 
 namespace Ptlk.RedisSnmp.Data;
 
@@ -9,6 +10,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<SnmpTrapCredentialConfig> SnmpTrapCredentialConfigs => Set<SnmpTrapCredentialConfig>();
     public DbSet<SnmpAgentConfig> SnmpAgentConfigs => Set<SnmpAgentConfig>();
     public DbSet<SnmpPointConfig> SnmpPointConfigs => Set<SnmpPointConfig>();
+    public DbSet<ExpressionConfig> ExpressionConfigs => Set<ExpressionConfig>();
+    public DbSet<ExpressionBinding> ExpressionBindings => Set<ExpressionBinding>();
     public DbSet<RedisMapping> RedisMappings => Set<RedisMapping>();
     public DbSet<CommandExecution> CommandExecutions => Set<CommandExecution>();
     public DbSet<SystemLogEntry> SystemLogEntries => Set<SystemLogEntry>();
@@ -111,6 +114,28 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(p => p.MibAccess).HasMaxLength(40);
             entity.Property(p => p.MibLabel).HasMaxLength(240);
             entity.Property(p => p.MibDescription).HasMaxLength(4000);
+        });
+
+        modelBuilder.Entity<ExpressionConfig>(entity =>
+        {
+            entity.HasIndex(e => e.Name).IsUnique();
+            entity.Property(e => e.Name).HasMaxLength(160).IsRequired();
+            entity.Property(e => e.Description).HasMaxLength(1000);
+            entity.Property(e => e.Rw).HasMaxLength(8).IsRequired();
+            entity.Property(e => e.ValueType).HasMaxLength(32).HasDefaultValue(ExpressionValueTypes.Double).IsRequired();
+            entity.Property(e => e.ReadReturnParameter).HasMaxLength(120);
+            entity.Property(e => e.WriteInputParameter).HasMaxLength(120);
+            entity.HasMany(e => e.Bindings)
+                  .WithOne(b => b.ExpressionConfig)
+                  .HasForeignKey(b => b.ExpressionConfigId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ExpressionBinding>(entity =>
+        {
+            entity.HasIndex(b => new { b.ExpressionConfigId, b.ParameterName }).IsUnique();
+            entity.Property(b => b.ParameterName).HasMaxLength(120).IsRequired();
+            entity.Property(b => b.SourcePath).HasMaxLength(320).IsRequired();
         });
 
         modelBuilder.Entity<RedisMapping>(entity =>

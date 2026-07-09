@@ -36,7 +36,7 @@ else
         <table class="table table-sm data-table align-middle">
             <thead>
                 <tr>
-                    <th>Agent</th>
+                    <th>Source</th>
                     <th>Point</th>
                     <th>Local value</th>
                     <th>Local quality</th>
@@ -49,9 +49,12 @@ else
             <tbody>
             @foreach (var row in rows)
             {
-                var canWrite = SnmpAccessModes.CanWrite(row.Access);
+                var canWrite = CanWriteRow(row);
                 <tr>
-                    <td>@row.AgentId</td>
+                    <td>
+                        <div>@row.Kind</div>
+                        <small>@row.AgentId</small>
+                    </td>
                     <td>
                         <div>@row.DisplayName</div>
                         <small>@row.SourcePath</small>
@@ -91,10 +94,13 @@ else
                     <td class="actions">
                         <div class="input-group input-group-sm">
                             <input class="form-control" placeholder="value" @bind="writeValues[row.SourcePath]" disabled="@(!canWrite)" />
-                            <button class="btn btn-outline-secondary" type="button" disabled="@(!canWrite)" @onclick="() => WriteSnmpAsync(row.SourcePath)">SNMP</button>
+                            @if (IsSnmpRow(row))
+                            {
+                                <button class="btn btn-outline-secondary" type="button" disabled="@(!canWrite)" @onclick="() => WriteSnmpAsync(row.SourcePath)">SNMP</button>
+                            }
                             @if (row.RedisKey is not null)
                             {
-                                <button class="btn btn-outline-primary" type="button" disabled="@(!row.Owned || !canWrite)" @onclick="() => WriteRedisAsync(row)">Redis</button>
+                                <button class="btn btn-outline-primary" type="button" disabled="@(!CanRedisWriteRow(row))" @onclick="() => WriteRedisAsync(row)">Redis</button>
                             }
                         </div>
                     </td>
@@ -322,6 +328,22 @@ else
 
     private static string OwnershipText(BrowserPointSnapshot row) =>
         row.Owned ? "owned" : row.OwnershipStatus ?? "not owned";
+
+    private static bool IsSnmpRow(BrowserPointSnapshot row) =>
+        row.Kind.Equals("SNMP", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsExpressionRow(BrowserPointSnapshot row) =>
+        row.Kind.Equals("Expression", StringComparison.OrdinalIgnoreCase);
+
+    private static bool CanWriteRow(BrowserPointSnapshot row) =>
+        IsExpressionRow(row)
+            ? row.Access is "Rw" or "Wo"
+            : SnmpAccessModes.CanWrite(row.Access);
+
+    private static bool CanRedisWriteRow(BrowserPointSnapshot row) =>
+        row.RedisKey is not null
+        && CanWriteRow(row)
+        && (!IsSnmpRow(row) || row.Owned);
 
     private static string StatusBadgeClass(string? status)
     {

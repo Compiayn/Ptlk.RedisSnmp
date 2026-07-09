@@ -5,6 +5,7 @@ using Ptlk.RedisSnmp.Configuration;
 using Ptlk.RedisSnmp.Data;
 using Ptlk.RedisSnmp.Services.Browser;
 using Ptlk.RedisSnmp.Services.Commands;
+using Ptlk.RedisSnmp.Services.Expressions;
 using Ptlk.RedisSnmp.Services.ImportExport;
 using Ptlk.RedisSnmp.Services.Logs;
 using Ptlk.RedisSnmp.Services.Mib;
@@ -43,6 +44,7 @@ builder.Services.AddSingleton<IRedisPubSubService>(sp => sp.GetRequiredService<R
 builder.Services.AddSingleton<RedisPointOwnershipService>();
 builder.Services.AddSingleton<SnmpSourcePathService>();
 builder.Services.AddSingleton<SnmpValueCache>();
+builder.Services.AddSingleton<ExpressionValueCache>();
 builder.Services.AddSingleton<SnmpQualityPolicy>();
 builder.Services.AddSingleton<INetSnmpProcessRunner, NetSnmpProcessRunner>();
 
@@ -57,6 +59,10 @@ builder.Services.AddScoped<NetSnmpArgumentBuilder>();
 builder.Services.AddScoped<SnmpClientService>();
 builder.Services.AddScoped<CommandDispatcherService>();
 builder.Services.AddScoped<CommandExecutionService>();
+builder.Services.AddSingleton<ExpressionScriptEngine>();
+builder.Services.AddScoped<ExpressionService>();
+builder.Services.AddScoped<ExpressionValidationService>();
+builder.Services.AddScoped<ExpressionRuntimeService>();
 builder.Services.AddScoped<BrowserSnapshotService>();
 builder.Services.AddScoped<LogService>();
 builder.Services.AddScoped<PathSuggestionService>();
@@ -76,6 +82,7 @@ builder.Services.AddHostedService<RedisPointOwnershipHostedService>();
 builder.Services.AddHostedService<RedisSnmpStatusService>();
 builder.Services.AddHostedService<DeviceCommandSubscriptionService>();
 builder.Services.AddHostedService<SnmpPollingHostedService>();
+builder.Services.AddHostedService<ExpressionRuntimeHostedService>();
 builder.Services.AddHostedService<NetSnmpTrapReceiverService>();
 
 builder.Services.AddRazorComponents()

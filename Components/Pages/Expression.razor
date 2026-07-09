@@ -1,0 +1,717 @@
+@page "/expression"
+@rendermode InteractiveServer
+@inject ExpressionService ExpressionService
+@inject ExpressionValidationService Validator
+@inject PathSuggestionService PathSuggestions
+@inject ScreenAlertService ScreenAlerts
+@inject IJSRuntime JS
+
+<div class="page-header">
+    <div>
+        <h1>Expression</h1>
+        <p class="page-kicker">Computed sources that can publish to mapped Redis point keys.</p>
+    </div>
+    <button class="btn btn-primary" type="button" @onclick="OpenNewExpression">Add Expression</button>
+</div>
+
+<ScreenAlertHost />
+
+<div class="toolbar">
+    <div>
+        <h2 class="toolbar-title">Expressions</h2>
+        <div class="muted-metadata">Mapped expressions use <code>exp:&lt;name&gt;</code> as SourcePath.</div>
+    </div>
+    <button class="btn btn-outline-primary" type="button" @onclick="LoadAsync" disabled="@loading">Refresh</button>
+</div>
+
+@if (loading)
+{
+    <div class="empty-state">Loading expressions...</div>
+}
+else if (expressions.Count == 0)
+{
+    <div class="empty-state">No expressions are configured.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm data-table align-middle">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>SourcePath</th>
+                    <th>Rw</th>
+                    <th>Value type</th>
+                    <th>Read return</th>
+                    <th class="numeric">Bindings</th>
+                    <th class="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var expression in expressions)
+            {
+                <tr>
+                    <td>
+                        <div>@expression.Name</div>
+                        @if (!string.IsNullOrWhiteSpace(expression.Description))
+                        {
+                            <small>@expression.Description</small>
+                        }
+                    </td>
+                    <td><code>exp:@expression.Name</code></td>
+                    <td><span class="@StatusBadgeClass(expression.Rw)">@expression.Rw</span></td>
+                    <td>@expression.ValueType</td>
+                    <td>@expression.ReadReturnParameter</td>
+                    <td class="numeric">@expression.Bindings.Count</td>
+                    <td class="actions">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenEditExpression(expression)">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => DeleteAsync(expression.Id)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (editorOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseEditor"></div>
+    <div class="dialog-panel autocomplete-dialog-panel" role="dialog" aria-modal="true">
+        <div class="dialog-header">
+            <div>
+                <h2 class="m-0">@(editingId is null ? "Add Expression" : "Edit Expression")</h2>
+                <div class="muted-metadata">@EditorSourcePath</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseEditor"></button>
+        </div>
+        <div class="dialog-body">
+            <div class="row g-3">
+                <div class="col-12 col-lg-4">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="editExpression.Name" />
+                </div>
+                <div class="col-12 col-lg-8">
+                    <label class="form-label">Description</label>
+                    <input class="form-control" @bind="editExpression.Description" />
+                </div>
+                <div class="col-12 col-lg-4">
+                    <label class="form-label">Rw</label>
+                    <div class="btn-group w-100" role="group" aria-label="Expression Rw">
+                        @foreach (var item in RwModes)
+                        {
+                            <input type="radio" class="btn-check" name="expression-rw" id="@($"expression-rw-{item}")" checked="@IsRw(editExpression, item)" @onchange="e => SetRw(editExpression, item)" />
+                            <label class="btn btn-outline-secondary" for="@($"expression-rw-{item}")">@item</label>
+                        }
+                    </div>
+                </div>
+                <div class="col-12 col-lg-4">
+                    <label class="form-label">Value type</label>
+                    <div class="btn-group w-100" role="group" aria-label="Expression value type">
+                        @foreach (var item in ValueTypes)
+                        {
+                            <input type="radio" class="btn-check" name="expression-value-type" id="@($"expression-value-{item}")" checked="@IsValueType(editExpression, item)" @onchange="e => SetValueType(editExpression, item)" />
+                            <label class="btn btn-outline-secondary" for="@($"expression-value-{item}")">@item</label>
+                        }
+                    </div>
+                </div>
+                <div class="col-12 col-lg-4">
+                    <label class="form-label">Read return</label>
+                    <input class="form-control" @bind="editExpression.ReadReturnParameter" />
+                </div>
+                <div class="col-12 col-lg-4">
+                    <label class="form-label">Write input</label>
+                    <input class="form-control" @bind="editExpression.WriteInputParameter" />
+                </div>
+            </div>
+
+            <hr />
+
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <h3 class="h6 m-0">Bindings</h3>
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="AddBinding">Add Binding</button>
+            </div>
+            @if (editExpression.Bindings.Count == 0)
+            {
+                <div class="empty-state compact">No bindings are configured.</div>
+            }
+            else
+            {
+                <div class="expression-binding-grid autocomplete-table-responsive">
+                    <div class="expression-binding-heading">Parameter</div>
+                    <div class="expression-binding-heading">SourcePath</div>
+                    <div class="expression-binding-heading actions">Actions</div>
+                    @for (var index = 0; index < editExpression.Bindings.Count; index++)
+                    {
+                        var binding = editExpression.Bindings[index];
+                        var bindingIndex = index;
+                        var removeIndex = index;
+                        <div class="expression-binding-cell" @key="@($"parameter-{bindingIndex}")">
+                            <input class="form-control form-control-sm" @bind="binding.ParameterName" />
+                        </div>
+                        <div class="expression-binding-cell expression-binding-source" @key="@($"source-{bindingIndex}")">
+                            <div class="sourcepath-autocomplete">
+                                <input class="form-control form-control-sm"
+                                       value="@binding.SourcePath"
+                                       placeholder="snmp:agent1/1.3.6.1.2.1.1.3.0"
+                                       autocomplete="off"
+                                       aria-autocomplete="list"
+                                       aria-expanded="@BindingSourcePathSuggestionsVisible(bindingIndex)"
+                                       aria-controls="@BindingSourcePathSuggestionsId(bindingIndex)"
+                                       @onfocus="() => OpenBindingSourcePathSuggestionsAsync(bindingIndex)"
+                                       @oninput="args => OnBindingSourcePathInputAsync(bindingIndex, args)"
+                                       @onkeydown="HandleBindingSourcePathKeyDown" />
+                            </div>
+                            @if (BindingSourcePathSuggestionsVisible(bindingIndex))
+                            {
+                                <div class="sourcepath-suggestion-menu expression-binding-suggestion-menu" id="@BindingSourcePathSuggestionsId(bindingIndex)" role="listbox">
+                                    @if (bindingSourcePathSuggestionLoading)
+                                    {
+                                        <div class="sourcepath-suggestion-state">Loading...</div>
+                                    }
+                                    else if (bindingSourcePathSuggestions.Count == 0)
+                                    {
+                                        @if (!string.IsNullOrWhiteSpace(bindingSourcePathSuggestionError))
+                                        {
+                                            <div class="sourcepath-suggestion-state">@bindingSourcePathSuggestionError</div>
+                                        }
+                                        else
+                                        {
+                                            <div class="sourcepath-suggestion-state">No matching source paths.</div>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        @foreach (var suggestion in bindingSourcePathSuggestions)
+                                        {
+                                            <button class="sourcepath-suggestion-item"
+                                                    type="button"
+                                                    role="option"
+                                                    @key="suggestion.SourcePath"
+                                                    @onmousedown:preventDefault="true"
+                                                    @onmousedown="() => SelectBindingSourcePathSuggestion(bindingIndex, suggestion)">
+                                                <span class="sourcepath-suggestion-main">
+                                                    @if (HasMibLabel(suggestion))
+                                                    {
+                                                        @HighlightText(suggestion.MibLabel, bindingSourcePathSearchText)
+                                                    }
+                                                    else
+                                                    {
+                                                        @suggestion.NumericOid
+                                                    }
+                                                </span>
+                                                <span class="sourcepath-suggestion-detail">
+                                                    @if (ShouldSearchSourcePath(bindingSourcePathSearchText))
+                                                    {
+                                                        <code>@HighlightText(suggestion.SourcePath, bindingSourcePathSearchText)</code>
+                                                    }
+                                                    else
+                                                    {
+                                                        <code>@suggestion.SourcePath</code>
+                                                    }
+                                                </span>
+                                                <span class="sourcepath-suggestion-meta">@FormatSuggestionMeta(suggestion)</span>
+                                            </button>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(bindingSourcePathSuggestionError))
+                                        {
+                                            <div class="sourcepath-suggestion-state">@bindingSourcePathSuggestionError</div>
+                                        }
+                                        @if (bindingSourcePathSuggestionHasMore)
+                                        {
+                                            <button class="sourcepath-suggestion-load-more"
+                                                    type="button"
+                                                    disabled="@bindingSourcePathSuggestionLoadingMore"
+                                                    @onmousedown:preventDefault="true"
+                                                    @onmousedown="LoadMoreBindingSourcePathSuggestionsAsync">
+                                                @(bindingSourcePathSuggestionLoadingMore ? "Loading..." : "Load more")
+                                            </button>
+                                        }
+                                    }
+                                </div>
+                            }
+                        </div>
+                        <div class="expression-binding-cell actions" @key="@($"actions-{bindingIndex}")">
+                            <button type="button" class="btn btn-outline-danger btn-sm" @onclick="() => RemoveBinding(removeIndex)">Remove</button>
+                        </div>
+                    }
+                </div>
+            }
+
+            <div class="row g-3 mt-1">
+                <div class="col-12 col-lg-6">
+                    <label class="form-label">Read script</label>
+                    <textarea class="form-control font-monospace" rows="6" @bind="editExpression.ReadScript"></textarea>
+                </div>
+                <div class="col-12 col-lg-6">
+                    <label class="form-label">Write script</label>
+                    <textarea class="form-control font-monospace" rows="6" @bind="editExpression.WriteScript"></textarea>
+                </div>
+            </div>
+
+            @if (validation.Count > 0)
+            {
+                <div class="mt-3">
+                    @foreach (var item in validation)
+                    {
+                        <div class="@(item.Level == "Error" ? "text-danger" : "text-warning")">@item.Field: @item.Message</div>
+                    }
+                </div>
+            }
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="Validate">Validate</button>
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseEditor">Cancel</button>
+            <button class="btn btn-primary" type="button" @onclick="ApplyAsync">Save</button>
+        </div>
+    </div>
+}
+
+@code {
+    private const int AutocompleteSuggestionPageSize = 24;
+    private static readonly string[] RwModes = ["Ro", "Rw", "Wo"];
+    private static readonly string[] ValueTypes = ExpressionValueTypes.All;
+
+    private bool loading = true;
+    private bool editorOpen;
+    private int? editingId;
+    private List<ExpressionConfig> expressions = [];
+    private ExpressionConfig editExpression = NewExpression();
+    private IReadOnlyList<ExpressionValidationMessage> validation = [];
+    private int? activeBindingSourcePathIndex;
+    private bool bindingSourcePathSuggestionsOpen;
+    private bool bindingSourcePathSuggestionLoading;
+    private bool bindingSourcePathSuggestionLoadingMore;
+    private bool bindingSourcePathSuggestionHasMore;
+    private int bindingSourcePathSuggestionNextOffset;
+    private int bindingSourcePathSearchVersion;
+    private string bindingSourcePathSearchText = "";
+    private string? bindingSourcePathSuggestionError;
+    private List<SourcePathSuggestion> bindingSourcePathSuggestions = [];
+
+    private string EditorSourcePath =>
+        string.IsNullOrWhiteSpace(editExpression.Name)
+            ? "exp:<name>"
+            : $"exp:{editExpression.Name.Trim()}";
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            loading = true;
+            expressions = await ExpressionService.ListAsync();
+        }
+        catch (Exception ex)
+        {
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Expression refresh failed");
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void OpenNewExpression()
+    {
+        editingId = null;
+        editExpression = NewExpression();
+        validation = [];
+        ResetBindingSourcePathSuggestions();
+        editorOpen = true;
+    }
+
+    private void OpenEditExpression(ExpressionConfig expression)
+    {
+        editingId = expression.Id;
+        editExpression = CloneExpression(expression);
+        validation = [];
+        ResetBindingSourcePathSuggestions();
+        editorOpen = true;
+    }
+
+    private void CloseEditor()
+    {
+        editorOpen = false;
+        editingId = null;
+        editExpression = NewExpression();
+        validation = [];
+        ResetBindingSourcePathSuggestions();
+    }
+
+    private void Validate()
+    {
+        validation = Validator.Validate(editExpression);
+    }
+
+    private async Task ApplyAsync()
+    {
+        Validate();
+        if (validation.Any(item => item.Level == "Error"))
+        {
+            return;
+        }
+
+        try
+        {
+            if (editingId is null)
+            {
+                await ExpressionService.AddAsync(editExpression);
+            }
+            else
+            {
+                await ExpressionService.UpdateAsync(editingId.Value, editExpression);
+            }
+
+            CloseEditor();
+            await ScreenAlerts.ShowAsync("Expression saved.", ScreenAlertSeverity.Success, "Expression");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Expression save failed");
+        }
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        try
+        {
+            if (!await JS.InvokeAsync<bool>("confirm", "Delete this expression and related Redis mappings?"))
+            {
+                return;
+            }
+
+            await ExpressionService.DeleteAsync(id);
+            await ScreenAlerts.ShowAsync("Expression deleted.", ScreenAlertSeverity.Success, "Expression");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ScreenAlerts.ShowAsync(ex.Message, ScreenAlertSeverity.Error, "Expression delete failed");
+        }
+    }
+
+    private void AddBinding() =>
+        editExpression.Bindings.Add(new ExpressionBinding());
+
+    private void RemoveBinding(int index)
+    {
+        if (index >= 0 && index < editExpression.Bindings.Count)
+        {
+            editExpression.Bindings.RemoveAt(index);
+            if (activeBindingSourcePathIndex == index
+                || activeBindingSourcePathIndex >= editExpression.Bindings.Count)
+            {
+                ResetBindingSourcePathSuggestions();
+            }
+        }
+    }
+
+    private bool BindingSourcePathSuggestionsVisible(int index) =>
+        bindingSourcePathSuggestionsOpen
+        && activeBindingSourcePathIndex == index
+        && !string.IsNullOrWhiteSpace(bindingSourcePathSearchText);
+
+    private static string BindingSourcePathSuggestionsId(int index) =>
+        $"expression-binding-sourcepath-suggestions-{index}";
+
+    private async Task OnBindingSourcePathInputAsync(int index, ChangeEventArgs args)
+    {
+        if (!TryGetBinding(index, out var binding))
+        {
+            ResetBindingSourcePathSuggestions();
+            return;
+        }
+
+        binding.SourcePath = args.Value?.ToString() ?? "";
+        activeBindingSourcePathIndex = index;
+        bindingSourcePathSuggestionsOpen = true;
+        await RefreshBindingSourcePathSuggestionsAsync(binding.SourcePath);
+    }
+
+    private async Task OpenBindingSourcePathSuggestionsAsync(int index)
+    {
+        if (!TryGetBinding(index, out var binding))
+        {
+            ResetBindingSourcePathSuggestions();
+            return;
+        }
+
+        activeBindingSourcePathIndex = index;
+        bindingSourcePathSuggestionsOpen = true;
+        await RefreshBindingSourcePathSuggestionsAsync(binding.SourcePath);
+    }
+
+    private async Task RefreshBindingSourcePathSuggestionsAsync(string sourcePath)
+    {
+        bindingSourcePathSuggestionError = null;
+        bindingSourcePathSearchText = sourcePath.Trim();
+        bindingSourcePathSuggestions = [];
+        bindingSourcePathSuggestionLoadingMore = false;
+        bindingSourcePathSuggestionHasMore = false;
+        bindingSourcePathSuggestionNextOffset = 0;
+
+        if (string.IsNullOrWhiteSpace(bindingSourcePathSearchText))
+        {
+            bindingSourcePathSuggestionLoading = false;
+            return;
+        }
+
+        var searchVersion = ++bindingSourcePathSearchVersion;
+        bindingSourcePathSuggestionLoading = true;
+
+        try
+        {
+            var suggestions = await PathSuggestions.SearchSnmpPointSuggestionsAsync(
+                bindingSourcePathSearchText,
+                AutocompleteSuggestionPageSize);
+            if (searchVersion != bindingSourcePathSearchVersion)
+            {
+                return;
+            }
+
+            bindingSourcePathSuggestions = suggestions.Items.ToList();
+            bindingSourcePathSuggestionHasMore = suggestions.HasMore;
+            bindingSourcePathSuggestionNextOffset = suggestions.NextOffset;
+        }
+        catch (Exception ex)
+        {
+            if (searchVersion != bindingSourcePathSearchVersion)
+            {
+                return;
+            }
+
+            bindingSourcePathSuggestionError = ex.Message;
+        }
+        finally
+        {
+            if (searchVersion == bindingSourcePathSearchVersion)
+            {
+                bindingSourcePathSuggestionLoading = false;
+            }
+        }
+    }
+
+    private async Task LoadMoreBindingSourcePathSuggestionsAsync()
+    {
+        if (bindingSourcePathSuggestionLoading
+            || bindingSourcePathSuggestionLoadingMore
+            || !bindingSourcePathSuggestionHasMore
+            || string.IsNullOrWhiteSpace(bindingSourcePathSearchText))
+        {
+            return;
+        }
+
+        var searchVersion = bindingSourcePathSearchVersion;
+        var query = bindingSourcePathSearchText;
+        bindingSourcePathSuggestionLoadingMore = true;
+        bindingSourcePathSuggestionError = null;
+
+        try
+        {
+            var suggestions = await PathSuggestions.SearchSnmpPointSuggestionsAsync(
+                query,
+                AutocompleteSuggestionPageSize,
+                bindingSourcePathSuggestionNextOffset);
+            if (searchVersion != bindingSourcePathSearchVersion
+                || !string.Equals(query, bindingSourcePathSearchText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            bindingSourcePathSuggestions.AddRange(suggestions.Items);
+            bindingSourcePathSuggestionHasMore = suggestions.HasMore;
+            bindingSourcePathSuggestionNextOffset = suggestions.NextOffset;
+        }
+        catch (Exception ex)
+        {
+            if (searchVersion != bindingSourcePathSearchVersion
+                || !string.Equals(query, bindingSourcePathSearchText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            bindingSourcePathSuggestionError = ex.Message;
+        }
+        finally
+        {
+            if (searchVersion == bindingSourcePathSearchVersion
+                && string.Equals(query, bindingSourcePathSearchText, StringComparison.Ordinal))
+            {
+                bindingSourcePathSuggestionLoadingMore = false;
+            }
+        }
+    }
+
+    private void SelectBindingSourcePathSuggestion(int index, SourcePathSuggestion suggestion)
+    {
+        if (TryGetBinding(index, out var binding))
+        {
+            binding.SourcePath = suggestion.SourcePath;
+        }
+
+        ResetBindingSourcePathSuggestions();
+    }
+
+    private void HandleBindingSourcePathKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            CloseBindingSourcePathSuggestions();
+        }
+    }
+
+    private void CloseBindingSourcePathSuggestions() => bindingSourcePathSuggestionsOpen = false;
+
+    private void ResetBindingSourcePathSuggestions()
+    {
+        activeBindingSourcePathIndex = null;
+        bindingSourcePathSuggestionsOpen = false;
+        bindingSourcePathSuggestionLoading = false;
+        bindingSourcePathSuggestionLoadingMore = false;
+        bindingSourcePathSuggestionHasMore = false;
+        bindingSourcePathSuggestionNextOffset = 0;
+        bindingSourcePathSearchText = "";
+        bindingSourcePathSuggestionError = null;
+        bindingSourcePathSuggestions = [];
+    }
+
+    private bool TryGetBinding(int index, out ExpressionBinding binding)
+    {
+        if (index >= 0 && index < editExpression.Bindings.Count)
+        {
+            binding = editExpression.Bindings[index];
+            return true;
+        }
+
+        binding = default!;
+        return false;
+    }
+
+    private static bool HasMibLabel(SourcePathSuggestion suggestion) =>
+        !string.IsNullOrWhiteSpace(suggestion.MibLabel);
+
+    private static bool ShouldSearchSourcePath(string query)
+    {
+        var trimmed = query.Trim();
+        return trimmed.StartsWith("snmp:", StringComparison.OrdinalIgnoreCase)
+               || trimmed.StartsWith("exp:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatSuggestionMeta(SourcePathSuggestion suggestion)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(suggestion.NumericOid))
+        {
+            parts.Add($"OID {suggestion.NumericOid}");
+        }
+
+        if (suggestion.Kind.Equals("Expression", StringComparison.OrdinalIgnoreCase))
+        {
+            parts.Add("Expression");
+        }
+
+        if (!string.IsNullOrWhiteSpace(suggestion.MibModule))
+        {
+            parts.Add(suggestion.MibModule);
+        }
+
+        if (!string.IsNullOrWhiteSpace(suggestion.MibSyntax))
+        {
+            parts.Add(suggestion.MibSyntax);
+        }
+
+        if (!string.IsNullOrWhiteSpace(suggestion.MibAccess))
+        {
+            parts.Add(suggestion.MibAccess);
+        }
+
+        return string.Join(" / ", parts);
+    }
+
+    private static MarkupString HighlightText(string? value, string query)
+    {
+        var text = value ?? "";
+        if (text.Length == 0 || string.IsNullOrWhiteSpace(query))
+        {
+            return new MarkupString(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text));
+        }
+
+        var builder = new System.Text.StringBuilder();
+        var searchIndex = 0;
+        while (searchIndex < text.Length)
+        {
+            var matchIndex = text.IndexOf(query, searchIndex, StringComparison.OrdinalIgnoreCase);
+            if (matchIndex < 0)
+            {
+                builder.Append(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text[searchIndex..]));
+                break;
+            }
+
+            builder.Append(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text[searchIndex..matchIndex]));
+            builder.Append("<mark class=\"sourcepath-match\">");
+            builder.Append(System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text.Substring(matchIndex, query.Length)));
+            builder.Append("</mark>");
+            searchIndex = matchIndex + query.Length;
+        }
+
+        return new MarkupString(builder.ToString());
+    }
+
+    private static bool IsRw(ExpressionConfig expression, string value) =>
+        expression.Rw.Equals(value, StringComparison.OrdinalIgnoreCase);
+
+    private static void SetRw(ExpressionConfig expression, string value) =>
+        expression.Rw = value is "Rw" or "Wo" ? value : "Ro";
+
+    private static bool IsValueType(ExpressionConfig expression, string value) =>
+        expression.ValueType.Equals(value, StringComparison.OrdinalIgnoreCase);
+
+    private static void SetValueType(ExpressionConfig expression, string value) =>
+        expression.ValueType = ExpressionValueTypes.Normalize(value);
+
+    private static ExpressionConfig CloneExpression(ExpressionConfig expression) => new()
+    {
+        Id = expression.Id,
+        Name = expression.Name,
+        Description = expression.Description,
+        Rw = expression.Rw,
+        ValueType = expression.ValueType,
+        ReadReturnParameter = expression.ReadReturnParameter,
+        ReadScript = expression.ReadScript,
+        WriteInputParameter = expression.WriteInputParameter,
+        WriteScript = expression.WriteScript,
+        Bindings = expression.Bindings
+            .Select(binding => new ExpressionBinding
+            {
+                Id = binding.Id,
+                ExpressionConfigId = binding.ExpressionConfigId,
+                ParameterName = binding.ParameterName,
+                SourcePath = binding.SourcePath
+            })
+            .ToList()
+    };
+
+    private static ExpressionConfig NewExpression() => new()
+    {
+        Name = "",
+        Rw = "Ro",
+        ValueType = ExpressionValueTypes.Double,
+        ReadReturnParameter = "result",
+        ReadScript = "result = 0;"
+    };
+
+    private static string StatusBadgeClass(string? status)
+    {
+        var normalized = status?.ToLowerInvariant();
+        return normalized switch
+        {
+            "ro" => "status-badge neutral",
+            "rw" => "status-badge success",
+            "wo" => "status-badge warning",
+            _ => "status-badge neutral"
+        };
+    }
+}

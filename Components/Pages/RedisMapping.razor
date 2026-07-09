@@ -73,7 +73,7 @@ else
         <div class="dialog-header">
             <div>
                 <h2 class="m-0">@((mappingId > 0) ? "Edit Mapping" : "Add Mapping")</h2>
-                <div class="muted-metadata">Source paths are validated against known SNMP points, health fields, or trap rules.</div>
+                <div class="muted-metadata">Source paths are validated against known SNMP points, expressions, health fields, or trap rules.</div>
             </div>
             <button class="btn-close" type="button" aria-label="Close" @onclick="CloseMappingDialog"></button>
         </div>
@@ -107,7 +107,7 @@ else
                                     }
                                     else
                                     {
-                                        <div class="sourcepath-suggestion-state">No matching SNMP points.</div>
+                                        <div class="sourcepath-suggestion-state">No matching source paths.</div>
                                     }
                                 }
                                 else
@@ -697,8 +697,12 @@ else
     private static bool HasMibLabel(SourcePathSuggestion suggestion) =>
         !string.IsNullOrWhiteSpace(suggestion.MibLabel);
 
-    private static bool ShouldSearchSourcePath(string query) =>
-        query.Trim().StartsWith("snmp:", StringComparison.OrdinalIgnoreCase);
+    private static bool ShouldSearchSourcePath(string query)
+    {
+        var trimmed = query.Trim();
+        return trimmed.StartsWith("snmp:", StringComparison.OrdinalIgnoreCase)
+               || trimmed.StartsWith("exp:", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string FormatSuggestionMeta(SourcePathSuggestion suggestion)
     {
@@ -706,6 +710,11 @@ else
         if (!string.IsNullOrWhiteSpace(suggestion.NumericOid))
         {
             parts.Add($"OID {suggestion.NumericOid}");
+        }
+
+        if (suggestion.Kind.Equals("Expression", StringComparison.OrdinalIgnoreCase))
+        {
+            parts.Add("Expression");
         }
 
         if (!string.IsNullOrWhiteSpace(suggestion.MibModule))

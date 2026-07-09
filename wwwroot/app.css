@@ -353,7 +353,7 @@ fieldset:disabled .btn:active {
 }
 
 .sourcepath-autocomplete:focus-within {
-    z-index: 4;
+    z-index: 1200;
 }
 
 .sourcepath-suggestion-menu {
@@ -361,13 +361,118 @@ fieldset:disabled .btn:active {
     top: calc(100% + 0.25rem);
     left: 0;
     right: 0;
-    z-index: 1080;
+    z-index: 1210;
     max-height: 18rem;
     overflow-y: auto;
     border: 1px solid #b8c4cf;
     border-radius: 6px;
     background: #ffffff;
     box-shadow: 0 14px 30px rgba(14, 22, 31, 0.16);
+}
+
+.autocomplete-table-responsive {
+    position: relative;
+    z-index: 1190;
+    overflow: visible;
+}
+
+.autocomplete-table-responsive:focus-within {
+    z-index: 1190;
+}
+
+.autocomplete-table-responsive table,
+.autocomplete-table-responsive tbody,
+.autocomplete-table-responsive tr:focus-within,
+.autocomplete-table-responsive td:focus-within {
+    position: relative;
+}
+
+.autocomplete-table-responsive table,
+.autocomplete-table-responsive tbody {
+    z-index: 1190;
+}
+
+.autocomplete-table-responsive tr:focus-within,
+.autocomplete-table-responsive td:focus-within {
+    z-index: 1230;
+}
+
+.autocomplete-table-responsive .sourcepath-autocomplete:focus-within {
+    z-index: 1240;
+}
+
+.autocomplete-table-responsive .sourcepath-suggestion-menu {
+    z-index: 1250;
+}
+
+.expression-binding-grid {
+    display: grid;
+    grid-template-columns: minmax(10rem, 1fr) minmax(18rem, 1.35fr) auto;
+    gap: 0.35rem 0.5rem;
+    align-items: start;
+}
+
+.expression-binding-heading {
+    padding: 0 0.35rem;
+    color: #596675;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.expression-binding-cell {
+    min-width: 0;
+}
+
+.expression-binding-heading.actions,
+.expression-binding-cell.actions {
+    width: auto;
+    justify-self: stretch;
+    text-align: right;
+}
+
+.expression-binding-cell.actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.expression-binding-source {
+    position: relative;
+    z-index: 1;
+}
+
+.expression-binding-source:focus-within {
+    z-index: 1250;
+}
+
+.expression-binding-suggestion-menu {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    right: 0;
+    width: auto;
+    z-index: 1260;
+    margin: 0;
+    max-height: min(18rem, 40vh);
+}
+
+@media (max-width: 720px) {
+    .expression-binding-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .expression-binding-heading {
+        display: none;
+    }
+
+    .expression-binding-cell.actions {
+        justify-self: stretch;
+    }
+
+    .expression-binding-cell.actions .btn {
+        width: 100%;
+    }
 }
 
 .sourcepath-suggestion-item {

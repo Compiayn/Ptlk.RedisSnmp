@@ -12,7 +12,7 @@ public sealed class RedisMappingValidationService(
     AppDbContext db,
     RedisConnectionFactory redis)
 {
-    private static readonly string[] ValidSourcePrefixes = ["snmp:", "snmp-health:", "snmp-trap:", "rds:"];
+    private static readonly string[] ValidSourcePrefixes = ["snmp:", "exp:", "snmp-health:", "snmp-trap:", "rds:"];
     private static readonly HashSet<string> HealthFields = new(StringComparer.OrdinalIgnoreCase)
     {
         "reachable",
@@ -31,7 +31,7 @@ public sealed class RedisMappingValidationService(
         if (string.IsNullOrWhiteSpace(sourcePath)
             || !ValidSourcePrefixes.Any(prefix => sourcePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
         {
-            return new MappingValidationResult(false, "SourcePath must start with snmp:, snmp-health:, snmp-trap:, or rds:.");
+            return new MappingValidationResult(false, "SourcePath must start with snmp:, exp:, snmp-health:, snmp-trap:, or rds:.");
         }
 
         if (string.IsNullOrWhiteSpace(redisKey))
@@ -84,6 +84,12 @@ public sealed class RedisMappingValidationService(
             && !await db.SnmpPointConfigs.AnyAsync(p => p.SourcePath == normalizedSource, cancellationToken))
         {
             return new MappingValidationResult(false, $"SourcePath '{normalizedSource}' does not match any SNMP point.");
+        }
+
+        if (normalizedSource.StartsWith("exp:", StringComparison.OrdinalIgnoreCase)
+            && !await HasExpressionReferenceAsync(normalizedSource, cancellationToken))
+        {
+            return new MappingValidationResult(false, $"SourcePath '{normalizedSource}' does not match any expression.");
         }
 
         if (normalizedSource.StartsWith("snmp-health:", StringComparison.OrdinalIgnoreCase)
@@ -187,5 +193,14 @@ public sealed class RedisMappingValidationService(
         return await db.SnmpTrapRuleConfigs.AnyAsync(
             rule => rule.AgentId == agentId && rule.TrapOid == trapOid,
             cancellationToken);
+    }
+
+    private async Task<bool> HasExpressionReferenceAsync(string sourcePath, CancellationToken cancellationToken)
+    {
+        var expressionName = sourcePath["exp:".Length..];
+        return !string.IsNullOrWhiteSpace(expressionName)
+               && await db.ExpressionConfigs.AnyAsync(
+                   expression => expression.Name == expressionName,
+                   cancellationToken);
     }
 }

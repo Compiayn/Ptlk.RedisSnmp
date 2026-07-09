@@ -5,6 +5,7 @@ using Ptlk.RedisSnmp.Configuration;
 using Ptlk.RedisSnmp.Contracts.Snmp;
 using Ptlk.RedisSnmp.Data;
 using Ptlk.RedisSnmp.Models;
+using Ptlk.RedisSnmp.Services.Expressions;
 using Ptlk.RedisSnmp.Services.Paths;
 using Ptlk.RedisSnmp.Services.Redis;
 
@@ -16,7 +17,8 @@ public sealed class CsvConfigService(
     AppDbContext db,
     IOptions<ImportExportOptions> options,
     SnmpSourcePathService paths,
-    RedisMappingValidationService mappingValidation)
+    RedisMappingValidationService mappingValidation,
+    ExpressionValidationService expressionValidator)
 {
     private const string Redacted = "__REDACTED__";
     private static readonly string[] ExportHeaders =
@@ -55,6 +57,16 @@ public sealed class CsvConfigService(
         "mib_syntax",
         "mib_access",
         "mib_description",
+        "expression_name",
+        "expression_description",
+        "expression_rw",
+        "expression_value_type",
+        "read_return_parameter",
+        "read_script",
+        "write_input_parameter",
+        "write_script",
+        "binding_parameter_name",
+        "binding_source_path",
         "mapping_source_path",
         "mapping_redis_key",
         "trap_oid",
@@ -160,6 +172,35 @@ public sealed class CsvConfigService(
             builder.AppendLine(Csv(row));
         }
 
+        var expressions = await db.ExpressionConfigs
+            .AsNoTracking()
+            .Include(e => e.Bindings.OrderBy(b => b.ParameterName))
+            .OrderBy(e => e.Name)
+            .ToListAsync(cancellationToken);
+
+        foreach (var expression in expressions)
+        {
+            var row = NewExportRow("expression");
+            Set(row, "expression_name", expression.Name);
+            Set(row, "expression_description", expression.Description ?? "");
+            Set(row, "expression_rw", expression.Rw);
+            Set(row, "expression_value_type", expression.ValueType);
+            Set(row, "read_return_parameter", expression.ReadReturnParameter ?? "");
+            Set(row, "read_script", expression.ReadScript ?? "");
+            Set(row, "write_input_parameter", expression.WriteInputParameter ?? "");
+            Set(row, "write_script", expression.WriteScript ?? "");
+            builder.AppendLine(Csv(row));
+
+            foreach (var binding in expression.Bindings.OrderBy(b => b.ParameterName))
+            {
+                var bindingRow = NewExportRow("expression_binding");
+                Set(bindingRow, "expression_name", expression.Name);
+                Set(bindingRow, "binding_parameter_name", binding.ParameterName);
+                Set(bindingRow, "binding_source_path", binding.SourcePath);
+                builder.AppendLine(Csv(bindingRow));
+            }
+        }
+
         foreach (var mapping in await db.RedisMappings.AsNoTracking().OrderBy(m => m.SourcePath).ToListAsync(cancellationToken))
         {
             var row = NewExportRow("mapping");
@@ -218,6 +259,12 @@ public sealed class CsvConfigService(
 
             imported += await ApplyPointsAsync(rows.Where(IsKind("point")), errors, cancellationToken);
             imported += await ApplyTrapRulesAsync(rows.Where(IsKind("trap_rule")), errors, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+
+            imported += await ApplyExpressionsAsync(rows.Where(IsKind("expression")), errors, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+
+            imported += await ApplyExpressionBindingsAsync(rows.Where(IsKind("expression_binding")), errors, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
 
             if (errors.Count == 0)
@@ -522,6 +569,107 @@ public sealed class CsvConfigService(
         return imported;
     }
 
+    private async Task<int> ApplyExpressionsAsync(
+        IEnumerable<ImportRow> rows,
+        List<string> errors,
+        CancellationToken cancellationToken)
+    {
+        var imported = 0;
+        foreach (var row in rows)
+        {
+            try
+            {
+                var name = row.Get("expression_name");
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    throw new InvalidOperationException("Expression name is required.");
+                }
+
+                var expression = await db.ExpressionConfigs
+                                     .Include(e => e.Bindings)
+                                     .FirstOrDefaultAsync(e => e.Name == name.Trim(), cancellationToken)
+                                 ?? db.ExpressionConfigs.Local.FirstOrDefault(e => e.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase))
+                                 ?? new ExpressionConfig();
+                expression.Name = name.Trim();
+                expression.Description = EmptyToNull(row.Get("expression_description"));
+                expression.Rw = NormalizeExpressionRw(row.Get("expression_rw"));
+                expression.ValueType = ExpressionValueTypes.Normalize(row.Get("expression_value_type"));
+                expression.ReadReturnParameter = EmptyToNull(row.Get("read_return_parameter"));
+                expression.ReadScript = EmptyToNull(row.Get("read_script"));
+                expression.WriteInputParameter = EmptyToNull(row.Get("write_input_parameter"));
+                expression.WriteScript = EmptyToNull(row.Get("write_script"));
+
+                ValidateExpression(expression);
+
+                if (expression.Id == 0 && db.Entry(expression).State == EntityState.Detached)
+                {
+                    db.ExpressionConfigs.Add(expression);
+                }
+
+                imported++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Line {row.Line}: {ex.Message}");
+            }
+        }
+
+        return imported;
+    }
+
+    private async Task<int> ApplyExpressionBindingsAsync(
+        IEnumerable<ImportRow> rows,
+        List<string> errors,
+        CancellationToken cancellationToken)
+    {
+        var imported = 0;
+        foreach (var row in rows)
+        {
+            try
+            {
+                var expressionName = row.Get("expression_name").Trim();
+                var parameterName = row.Get("binding_parameter_name").Trim();
+                var sourcePath = row.Get("binding_source_path").Trim();
+                if (string.IsNullOrWhiteSpace(expressionName))
+                {
+                    throw new InvalidOperationException("Expression name is required.");
+                }
+                if (string.IsNullOrWhiteSpace(parameterName))
+                {
+                    throw new InvalidOperationException("Binding parameter name is required.");
+                }
+                if (string.IsNullOrWhiteSpace(sourcePath))
+                {
+                    throw new InvalidOperationException("Binding SourcePath is required.");
+                }
+
+                var expression = await db.ExpressionConfigs
+                                     .Include(e => e.Bindings)
+                                     .FirstOrDefaultAsync(e => e.Name == expressionName, cancellationToken)
+                                 ?? db.ExpressionConfigs.Local.FirstOrDefault(e => e.Name.Equals(expressionName, StringComparison.OrdinalIgnoreCase))
+                                 ?? throw new InvalidOperationException($"Expression '{expressionName}' was not found before binding import.");
+
+                var binding = expression.Bindings.FirstOrDefault(b => b.ParameterName.Equals(parameterName, StringComparison.OrdinalIgnoreCase));
+                if (binding is null)
+                {
+                    binding = new ExpressionBinding { ExpressionConfig = expression };
+                    expression.Bindings.Add(binding);
+                }
+
+                binding.ParameterName = parameterName;
+                binding.SourcePath = sourcePath;
+                ValidateExpression(expression);
+                imported++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Line {row.Line}: {ex.Message}");
+            }
+        }
+
+        return imported;
+    }
+
     private async Task<int> ApplyMappingsAsync(
         IEnumerable<ImportRow> rows,
         List<string> errors,
@@ -710,6 +858,20 @@ public sealed class CsvConfigService(
         string.IsNullOrWhiteSpace(value) || value.Equals(Redacted, StringComparison.OrdinalIgnoreCase)
             ? null
             : value.Trim();
+
+    private void ValidateExpression(ExpressionConfig expression)
+    {
+        var errors = expressionValidator.Validate(expression).Where(m => m.Level == "Error").ToList();
+        if (errors.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join(" ", errors.Select(error => $"{error.Field}: {error.Message}")));
+        }
+    }
+
+    private static string NormalizeExpressionRw(string value) =>
+        value.Equals("Rw", StringComparison.OrdinalIgnoreCase) ? "Rw"
+        : value.Equals("Wo", StringComparison.OrdinalIgnoreCase) ? "Wo"
+        : "Ro";
 
     private static void SetProtectedSecretIfPresent(ImportRow row, string name, Action<string> apply)
     {

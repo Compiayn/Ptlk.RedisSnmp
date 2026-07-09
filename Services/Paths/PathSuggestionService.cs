@@ -11,7 +11,8 @@ public sealed record SourcePathSuggestion(
     string NumericOid,
     string? MibModule,
     string? MibSyntax,
-    string? MibAccess);
+    string? MibAccess,
+    string Kind = "SNMP");
 
 public sealed class PathSuggestionService(AppDbContext db)
 {
@@ -29,27 +30,55 @@ public sealed class PathSuggestionService(AppDbContext db)
 
         var boundedLimit = Math.Clamp(limit, 1, 100);
         var boundedOffset = Math.Max(offset, 0);
-        var searchSourcePath = normalizedQuery.StartsWith("snmp:", StringComparison.OrdinalIgnoreCase);
+        var searchSnmpSourcePath = normalizedQuery.StartsWith("snmp:", StringComparison.OrdinalIgnoreCase);
+        var searchExpressionSourcePath = normalizedQuery.StartsWith("exp:", StringComparison.OrdinalIgnoreCase);
         var normalizedQueryLower = normalizedQuery.ToLowerInvariant();
         var pattern = $"%{EscapeLikePattern(normalizedQueryLower)}%";
+        var scanLimit = Math.Clamp(boundedOffset + boundedLimit + 25, boundedLimit + 1, 500);
 
-        var results = await db.SnmpPointConfigs
+        var pointResults = await db.SnmpPointConfigs
             .AsNoTracking()
             .Where(point =>
-                (searchSourcePath && EF.Functions.Like(point.SourcePath.ToLower(), pattern, "\\"))
+                (searchSnmpSourcePath && EF.Functions.Like(point.SourcePath.ToLower(), pattern, "\\"))
                 || (point.MibLabel != null && EF.Functions.Like(point.MibLabel.ToLower(), pattern, "\\")))
             .OrderBy(point => point.MibLabel ?? point.NumericOid)
             .ThenBy(point => point.SourcePath)
-            .Skip(boundedOffset)
             .Select(point => new SourcePathSuggestion(
                 point.SourcePath,
                 point.MibLabel,
                 point.NumericOid,
                 point.MibModule,
                 point.MibSyntax,
-                point.MibAccess))
-            .Take(boundedLimit + 1)
+                point.MibAccess,
+                "SNMP"))
+            .Take(scanLimit)
             .ToListAsync(cancellationToken);
+
+        var expressionResults = await db.ExpressionConfigs
+            .AsNoTracking()
+            .Where(expression =>
+                EF.Functions.Like(expression.Name.ToLower(), pattern, "\\")
+                || (searchExpressionSourcePath && EF.Functions.Like(("exp:" + expression.Name).ToLower(), pattern, "\\")))
+            .OrderBy(expression => expression.Name)
+            .Select(expression => new SourcePathSuggestion(
+                $"exp:{expression.Name}",
+                expression.Name,
+                "",
+                null,
+                expression.ValueType,
+                expression.Rw,
+                "Expression"))
+            .Take(scanLimit)
+            .ToListAsync(cancellationToken);
+
+        var results = pointResults
+            .Concat(expressionResults)
+            .OrderBy(item => item.Kind)
+            .ThenBy(item => item.MibLabel ?? item.NumericOid)
+            .ThenBy(item => item.SourcePath)
+            .Skip(boundedOffset)
+            .Take(boundedLimit + 1)
+            .ToList();
 
         var items = results.Take(boundedLimit).ToList();
         return new SuggestionPage<SourcePathSuggestion>(
@@ -66,6 +95,12 @@ public sealed class PathSuggestionService(AppDbContext db)
             .Select(point => point.SourcePath)
             .ToListAsync(cancellationToken);
 
+        var expressionPaths = await db.ExpressionConfigs
+            .AsNoTracking()
+            .OrderBy(expression => expression.Name)
+            .Select(expression => $"exp:{expression.Name}")
+            .ToListAsync(cancellationToken);
+
         var agentIds = await db.SnmpAgentConfigs
             .AsNoTracking()
             .OrderBy(agent => agent.AgentId)
@@ -78,7 +113,30 @@ public sealed class PathSuggestionService(AppDbContext db)
             $"snmp-health:{agentId}/errorCount"
         });
 
-        return pointPaths.Concat(agentHealth).ToList();
+        return pointPaths.Concat(expressionPaths).Concat(agentHealth).ToList();
+    }
+
+    public async Task<IReadOnlyList<string>> GetExpressionBindingSourcePathSuggestionsAsync(CancellationToken cancellationToken = default)
+    {
+        var pointPaths = await db.SnmpPointConfigs
+            .AsNoTracking()
+            .OrderBy(point => point.SourcePath)
+            .Select(point => point.SourcePath)
+            .ToListAsync(cancellationToken);
+
+        var expressionPaths = await db.ExpressionConfigs
+            .AsNoTracking()
+            .OrderBy(expression => expression.Name)
+            .Select(expression => $"exp:{expression.Name}")
+            .ToListAsync(cancellationToken);
+
+        return pointPaths
+            .Concat(expressionPaths)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path)
+            .Take(500)
+            .ToList();
     }
 
     private static string EscapeLikePattern(string value)
