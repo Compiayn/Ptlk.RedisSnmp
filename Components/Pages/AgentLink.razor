@@ -9,6 +9,7 @@
 @inject MibLookupService MibLookup
 @inject SnmpSourcePathService Paths
 @inject ScreenAlertService ScreenAlerts
+@using Ptlk.RedisSnmp.Components.Selection
 
 <div class="page-header">
     <div>
@@ -672,9 +673,7 @@ else
                         <table class="table table-sm data-table align-middle">
                             <thead>
                                 <tr>
-                                    <th>Point</th>
-                                    <th>OID</th>
-                                    <th>MIB</th>
+                                    <th>MIB LABEL</th>
                                     <th>Value type</th>
                                     <th>Access</th>
                                     <th class="actions">Actions</th>
@@ -684,13 +683,9 @@ else
                             @foreach (var item in ManagedAgentPoints)
                             {
                                 <tr class='@(pointDialogOpen && point.Id == item.Id ? "selected-row" : null)'>
-                                    <td>
-                                        <div>@DisplayPointIdentity(item)</div>
-                                        <small>@item.SourcePath</small>
-                                    </td>
-                                    <td><code>@item.NumericOid</code></td>
-                                    <td>
-                                        <div>@(item.MibLabel ?? "-")</div>
+                                    <td class="mib-label-cell">
+                                        <div>@DisplayMibLabel(item.MibLabel)</div>
+                                        <code>@item.NumericOid</code>
                                     </td>
                                     <td>@item.ValueType</td>
                                     <td><span class="status-badge neutral">@item.Access</span></td>
@@ -756,13 +751,25 @@ else
                 }
                 else
                 {
+                    <div class="candidate-selection-help">
+                        Select rows with a click. Use Shift for a range and Ctrl (or Command) to add or remove individual rows.
+                    </div>
+                    @if (candidateRowSelection.Count > 0)
+                    {
+                        <div class="candidate-selection-toolbar" aria-label="Selected candidate actions">
+                            <span class="candidate-selection-count" role="status">@candidateRowSelection.Count row(s) selected</span>
+                            <div class="candidate-selection-actions">
+                                <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => SetSelectedCandidateImportState(true)">Check Selected</button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => SetSelectedCandidateImportState(false)">Uncheck Selected</button>
+                            </div>
+                        </div>
+                    }
                     <div class="table-responsive point-candidate-table">
-                        <table class="table table-sm data-table align-middle">
+                        <table class="table table-sm data-table align-middle" role="grid" aria-label="Point candidates" aria-multiselectable="true">
                             <thead>
                                 <tr>
-                                    <th>Select</th>
-                                    <th>OID</th>
-                                    <th>Label</th>
+                                    <th>Import</th>
+                                    <th>MIB LABEL</th>
                                     <th>Module</th>
                                     <th>Syntax</th>
                                     <th>Access</th>
@@ -773,17 +780,32 @@ else
                             <tbody>
                             @foreach (var candidate in pointCandidates)
                             {
-                                <tr>
+                                <tr @key="candidate.NumericOid"
+                                    @ref="candidate.RowElement"
+                                    class="@CandidateRowClass(candidate)"
+                                    role="row"
+                                    tabindex="0"
+                                    aria-selected="@(candidateRowSelection.IsSelected(candidate.NumericOid) ? "true" : "false")"
+                                    @onclick="args => SelectCandidateRowAsync(args, candidate)"
+                                    @onfocus="() => FocusCandidateRow(candidate)"
+                                    @onkeydown="args => HandleCandidateRowKeyDownAsync(args, candidate)">
                                     <td>
-                                        <input class="form-check-input" type="checkbox" @bind="candidate.Selected" disabled="@candidate.Exists" />
+                                        <input class="form-check-input"
+                                               type="checkbox"
+                                               aria-label="@CandidateImportAriaLabel(candidate)"
+                                               @bind="candidate.Selected"
+                                               @onclick:stopPropagation="true"
+                                               @onkeydown:stopPropagation="true" />
                                     </td>
-                                    <td><code>@candidate.NumericOid</code></td>
-                                    <td>@(candidate.Label ?? "-")</td>
+                                    <td class="mib-label-cell">
+                                        <div>@DisplayMibLabel(candidate.Label)</div>
+                                        <code>@candidate.NumericOid</code>
+                                    </td>
                                     <td>@(candidate.Module ?? "-")</td>
                                     <td>@(candidate.Syntax ?? "-")</td>
                                     <td><span class="status-badge neutral">@candidate.Access</span></td>
                                     <td class="code-cell">@candidate.CurrentValue</td>
-                                    <td><span class="@StatusBadgeClass(candidate.Exists ? "disabled" : "normal")">@candidate.Status</span></td>
+                                    <td><span class="@StatusBadgeClass(candidate.Status)">@candidate.Status</span></td>
                                 </tr>
                             }
                             </tbody>
@@ -796,8 +818,82 @@ else
             <button class="btn btn-outline-secondary" type="button" @onclick="CloseGenerateDialog">Close</button>
             @if (pointManagerTab == PointManagerBuildTab)
             {
-                <button class="btn btn-primary" type="button" @onclick="ApplyGeneratedPointsAsync" disabled="@(pointCandidates.All(c => !c.Selected || c.Exists))">Apply Selected</button>
+                <button class="btn btn-primary" type="button" @onclick="OpenBuildConfirmation" disabled="@pointCandidates.All(c => !c.Selected)">Apply Selected</button>
             }
+        </div>
+    </div>
+}
+
+@if (buildConfirmationOpen && generateAgent is not null)
+{
+    <div class="dialog-backdrop nested-dialog-backdrop" @onclick="CloseBuildConfirmation"></div>
+    <div class="dialog-panel wide nested-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="build-confirmation-title">
+        <div class="dialog-header">
+            <div>
+                <h2 id="build-confirmation-title" class="m-0">Confirm Point Import</h2>
+                <div class="muted-metadata">@generateAgent.DisplayName</div>
+            </div>
+            <button class="btn-close" type="button" aria-label="Close" @onclick="CloseBuildConfirmation" disabled="@buildImportRunning"></button>
+        </div>
+        <div class="dialog-body">
+            @if (!string.IsNullOrWhiteSpace(buildConfirmationError))
+            {
+                <div class="alert alert-danger">@buildConfirmationError</div>
+            }
+
+            <p>Import <strong>@BuildConfirmationSelectedCandidates.Count</strong> selected point(s): <strong>@BuildConfirmationNewCount</strong> new and <strong>@BuildConfirmationOverwriteCount</strong> overwrite(s).</p>
+
+            @if (BuildConfirmationConflictCandidates.Count > 0)
+            {
+                <div class="alert alert-warning" role="alert">
+                    The following points conflict with existing source paths. Clear Overwrite to skip a point. Cleared rows remain visible here until you close this confirmation and apply again.
+                </div>
+                <div class="table-responsive point-conflict-table">
+                    <table class="table table-sm data-table align-middle">
+                        <thead>
+                            <tr>
+                                <th>Overwrite</th>
+                                <th>MIB LABEL</th>
+                                <th>Existing</th>
+                                <th>Incoming</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var candidate in BuildConfirmationConflictCandidates)
+                        {
+                            var existing = ExistingPoint(candidate);
+                            <tr class='@(!candidate.Selected ? "excluded-row" : null)'>
+                                <td>
+                                    <input class="form-check-input" type="checkbox" aria-label="Overwrite @candidate.NumericOid" @bind="candidate.Selected" disabled="@buildImportRunning" />
+                                </td>
+                                <td class="mib-label-cell">
+                                    <div>@DisplayMibLabel(candidate.Label)</div>
+                                    <code>@candidate.NumericOid</code>
+                                </td>
+                                <td>
+                                    <div>@DisplayMibLabel(existing?.MibLabel)</div>
+                                    <small>@(existing?.ValueType ?? "-") / @(existing?.Access ?? "-")</small>
+                                </td>
+                                <td>
+                                    <div>@DisplayMibLabel(candidate.Label)</div>
+                                    <small>@candidate.ValueType / @candidate.Access</small>
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-info" role="status">No conflicts were found in the selected points.</div>
+            }
+        </div>
+        <div class="dialog-footer">
+            <button class="btn btn-outline-secondary" type="button" @onclick="CloseBuildConfirmation" disabled="@buildImportRunning">Back</button>
+            <button class='btn @(BuildConfirmationOverwriteCount > 0 ? "btn-warning" : "btn-primary")' type="button" @onclick="ApplyGeneratedPointsAsync" disabled="@(buildImportRunning || BuildConfirmationSelectedCandidates.Count == 0)">
+                @(buildImportRunning ? "Importing..." : "Confirm Import")
+            </button>
         </div>
     </div>
 }
@@ -854,6 +950,8 @@ else
     private bool walkRunning;
     private bool generateDialogOpen;
     private bool generateRunning;
+    private bool buildConfirmationOpen;
+    private bool buildImportRunning;
     private string? deleteKind;
     private int deleteId;
     private string deleteName = "";
@@ -878,12 +976,21 @@ else
     private string pointManagerTab = PointManagerPointsTab;
     private string? pointManagerMessage;
     private bool pointManagerMessageIsError;
+    private string? buildConfirmationError;
+    private List<PointCandidate> buildConfirmationCandidates = [];
+    private readonly ExtendedSelectionState candidateRowSelection = new(StringComparer.OrdinalIgnoreCase);
 
     private IReadOnlyList<WalkTreeRow> VisibleWalkRows => FlattenWalkTree(walkTree, expandedWalkNodes);
     private IReadOnlyList<SnmpPointConfig> ManagedAgentPoints =>
         generateAgent is null
             ? Array.Empty<SnmpPointConfig>()
             : points.Where(p => p.AgentConfigId == generateAgent.Id).ToList();
+    private IReadOnlyList<PointCandidate> SelectedPointCandidates => pointCandidates.Where(c => c.Selected).ToList();
+    private IReadOnlyList<PointCandidate> BuildConfirmationSelectedCandidates => buildConfirmationCandidates.Where(c => c.Selected).ToList();
+    private IReadOnlyList<PointCandidate> BuildConfirmationConflictCandidates => buildConfirmationCandidates.Where(c => c.Exists).ToList();
+    private int BuildConfirmationOverwriteCount => BuildConfirmationSelectedCandidates.Count(c => c.Exists);
+    private int BuildConfirmationNewCount => BuildConfirmationSelectedCandidates.Count - BuildConfirmationOverwriteCount;
+    private IReadOnlyList<string> CandidateRowKeys => pointCandidates.Select(candidate => candidate.NumericOid).ToList();
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -983,9 +1090,13 @@ else
         generateReadableOnly = true;
         generateError = null;
         pointCandidates = [];
+        candidateRowSelection.Clear();
         pointManagerTab = PointManagerPointsTab;
         pointManagerMessage = null;
         pointManagerMessageIsError = false;
+        buildConfirmationOpen = false;
+        buildConfirmationError = null;
+        buildConfirmationCandidates = [];
         generateDialogOpen = true;
     }
 
@@ -998,11 +1109,125 @@ else
 
         generateDialogOpen = false;
         pointDialogOpen = false;
+        buildConfirmationOpen = false;
+        buildConfirmationCandidates = [];
+        candidateRowSelection.Clear();
     }
 
     private void ShowPointManagerPointsTab() => pointManagerTab = PointManagerPointsTab;
 
     private void ShowPointManagerBuildTab() => pointManagerTab = PointManagerBuildTab;
+
+    private async Task SelectCandidateRowAsync(MouseEventArgs args, PointCandidate candidate)
+    {
+        candidateRowSelection.ApplyPointerSelection(
+            CandidateRowKeys,
+            candidate.NumericOid,
+            range: args.ShiftKey,
+            additive: args.CtrlKey || args.MetaKey);
+        await candidate.RowElement.FocusAsync(preventScroll: true);
+    }
+
+    private void FocusCandidateRow(PointCandidate candidate) =>
+        candidateRowSelection.SetFocus(candidate.NumericOid, CandidateRowKeys);
+
+    private async Task HandleCandidateRowKeyDownAsync(KeyboardEventArgs args, PointCandidate candidate)
+    {
+        var orderedKeys = CandidateRowKeys;
+        var additive = args.CtrlKey || args.MetaKey;
+
+        if (args.Key == "Escape")
+        {
+            candidateRowSelection.Clear();
+            return;
+        }
+
+        if (additive && string.Equals(args.Key, "a", StringComparison.OrdinalIgnoreCase))
+        {
+            candidateRowSelection.SelectAll(orderedKeys);
+            return;
+        }
+
+        if (args.Key is " " or "Spacebar")
+        {
+            candidateRowSelection.ApplyPointerSelection(
+                orderedKeys,
+                candidate.NumericOid,
+                range: false,
+                additive: additive);
+            return;
+        }
+
+        var currentIndex = pointCandidates.FindIndex(item =>
+            string.Equals(item.NumericOid, candidate.NumericOid, StringComparison.OrdinalIgnoreCase));
+        var targetIndex = args.Key switch
+        {
+            "ArrowUp" => Math.Max(0, currentIndex - 1),
+            "ArrowDown" => Math.Min(orderedKeys.Count - 1, currentIndex + 1),
+            "Home" => 0,
+            "End" => orderedKeys.Count - 1,
+            _ => -1
+        };
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex == currentIndex)
+        {
+            return;
+        }
+
+        var target = pointCandidates[targetIndex];
+        if (args.ShiftKey)
+        {
+            candidateRowSelection.ApplyPointerSelection(
+                orderedKeys,
+                target.NumericOid,
+                range: true,
+                additive: additive);
+        }
+        else
+        {
+            candidateRowSelection.SetFocus(target.NumericOid, orderedKeys);
+        }
+
+        await target.RowElement.FocusAsync(preventScroll: false);
+    }
+
+    private void SetSelectedCandidateImportState(bool selected)
+    {
+        var selectedKeys = candidateRowSelection.SelectedKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in pointCandidates.Where(candidate => selectedKeys.Contains(candidate.NumericOid)))
+        {
+            candidate.Selected = selected;
+        }
+    }
+
+    private string CandidateRowClass(PointCandidate candidate) =>
+        candidateRowSelection.IsSelected(candidate.NumericOid)
+            ? "candidate-selection-row selected-row"
+            : "candidate-selection-row";
+
+    private static string CandidateImportAriaLabel(PointCandidate candidate) =>
+        $"Import {DisplayMibLabel(candidate.Label)} ({candidate.NumericOid})";
+
+    private void OpenBuildConfirmation()
+    {
+        if (SelectedPointCandidates.Count == 0)
+        {
+            return;
+        }
+
+        buildConfirmationError = null;
+        buildConfirmationCandidates = SelectedPointCandidates.ToList();
+        buildConfirmationOpen = true;
+    }
+
+    private void CloseBuildConfirmation()
+    {
+        if (!buildImportRunning)
+        {
+            buildConfirmationOpen = false;
+            buildConfirmationError = null;
+            buildConfirmationCandidates = [];
+        }
+    }
 
     private async Task RunWalkAsync()
     {
@@ -1072,6 +1297,7 @@ else
     {
         generateSelectedMibSetId = ParseMibSetValue(args.Value);
         pointCandidates = [];
+        candidateRowSelection.Clear();
         pointManagerMessage = null;
     }
 
@@ -1103,6 +1329,9 @@ else
             generateError = null;
             pointManagerMessage = null;
             pointCandidates = [];
+            candidateRowSelection.Clear();
+            buildConfirmationOpen = false;
+            buildConfirmationCandidates = [];
             generateRunning = true;
 
             generateCancellation?.Dispose();
@@ -1142,34 +1371,54 @@ else
 
         try
         {
-            var created = 0;
-            foreach (var candidate in pointCandidates.Where(c => c.Selected && !c.Exists))
+            buildConfirmationError = null;
+            var selectedCandidates = BuildConfirmationSelectedCandidates.ToList();
+            if (selectedCandidates.Count == 0)
             {
-                await Points.CreateOrUpdateAsync(new SnmpPointConfig
-                {
-                    AgentConfigId = generateAgent.Id,
-                    NumericOid = candidate.NumericOid,
-                    ValueType = candidate.ValueType,
-                    Access = candidate.Access,
-                    Description = candidate.Description,
-                    MibLabel = candidate.Label,
-                    MibModule = candidate.Module,
-                    MibSyntax = candidate.Syntax,
-                    MibAccess = candidate.MibAccess,
-                    MibDescription = candidate.Description
-                });
+                buildConfirmationError = "Select at least one point to import.";
+                return;
+            }
+
+            buildImportRunning = true;
+            var overwritten = selectedCandidates.Count(candidate => candidate.Exists);
+            var created = selectedCandidates.Count - overwritten;
+            var inputs = selectedCandidates.Select(candidate => new SnmpPointConfig
+            {
+                AgentConfigId = generateAgent.Id,
+                NumericOid = candidate.NumericOid,
+                ValueType = candidate.ValueType,
+                Access = candidate.Access,
+                Description = candidate.Description,
+                MibLabel = candidate.Label,
+                MibModule = candidate.Module,
+                MibSyntax = candidate.Syntax,
+                MibAccess = candidate.MibAccess,
+                MibDescription = candidate.Description
+            }).ToList();
+            var savedPoints = await Points.CreateOrOverwriteBatchAsync(inputs);
+
+            for (var index = 0; index < selectedCandidates.Count; index++)
+            {
+                var candidate = selectedCandidates[index];
+                var wasConflict = candidate.Exists;
                 candidate.Exists = true;
+                candidate.ExistingPointId = savedPoints[index].Id;
                 candidate.Selected = false;
-                candidate.Status = "created";
-                created++;
+                candidate.Status = wasConflict ? "overwritten" : "created";
             }
 
             await LoadAsync();
-            SetPointManagerMessage($"Created {created} point(s).");
+            buildConfirmationOpen = false;
+            buildConfirmationCandidates = [];
+            SetPointManagerMessage($"Imported {created + overwritten} point(s): {created} created and {overwritten} overwritten.");
         }
         catch (Exception ex)
         {
-            SetPointManagerMessage(ex.Message, isError: true);
+            buildConfirmationError = ex.Message;
+        }
+        finally
+        {
+            buildImportRunning = false;
         }
     }
 
@@ -1191,7 +1440,7 @@ else
         IReadOnlyList<SnmpWalkItem> items,
         IReadOnlyDictionary<string, MibLookupResult> lookupByOid)
     {
-        var existingSourcePaths = points.Select(p => p.SourcePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingBySourcePath = points.ToDictionary(p => p.SourcePath, StringComparer.OrdinalIgnoreCase);
         var candidates = new List<PointCandidate>();
 
         foreach (var item in items.OrderBy(i => i.Oid, OidPathComparer.Instance))
@@ -1205,11 +1454,13 @@ else
             }
 
             var sourcePath = Paths.BuildPointSourcePath(sourceAgent.AgentId, numericOid);
-            var exists = existingSourcePaths.Contains(sourcePath);
+            existingBySourcePath.TryGetValue(sourcePath, out var existingPoint);
+            var exists = existingPoint is not null;
             candidates.Add(new PointCandidate
             {
-                Selected = !exists,
+                Selected = true,
                 Exists = exists,
+                ExistingPointId = existingPoint?.Id,
                 NumericOid = numericOid,
                 Label = lookup?.SymbolicName,
                 Module = lookup?.ModuleName,
@@ -1219,7 +1470,7 @@ else
                 CurrentValue = item.Value ?? "",
                 ValueType = InferValueType(lookup?.Syntax ?? item.Syntax),
                 Description = lookup?.Description,
-                Status = exists ? "existing" : "new"
+                Status = exists ? "conflict" : "new"
             });
         }
 
@@ -1318,7 +1569,7 @@ else
         OpenDeleteDialog("agent", item.Id, item.AgentId);
 
     private void OpenPointDeleteDialog(SnmpPointConfig item) =>
-        OpenDeleteDialog("point", item.Id, DisplayPointIdentity(item));
+        OpenDeleteDialog("point", item.Id, $"{DisplayMibLabel(item.MibLabel)} ({item.NumericOid})");
 
     private void OpenDeleteDialog(string kind, int id, string name)
     {
@@ -1544,10 +1795,11 @@ else
         return SnmpValueTypes.String;
     }
 
-    private static string DisplayPointIdentity(SnmpPointConfig item) =>
-        !string.IsNullOrWhiteSpace(item.MibLabel)
-            ? item.MibLabel
-            : item.NumericOid;
+    private static string DisplayMibLabel(string? mibLabel) =>
+        string.IsNullOrWhiteSpace(mibLabel) ? "Numeric OID" : mibLabel;
+
+    private SnmpPointConfig? ExistingPoint(PointCandidate candidate) =>
+        candidate.ExistingPointId is int id ? points.FirstOrDefault(p => p.Id == id) : null;
 
     private static string StatusBadgeClass(string? status)
     {
@@ -1555,7 +1807,7 @@ else
         return normalized switch
         {
             "normal" or "good" or "enabled" => "status-badge success",
-            "starting" or "unset" => "status-badge warning",
+            "starting" or "unset" or "warning" or "conflict" => "status-badge warning",
             "degraded" or "bad" or "failed" or "error" => "status-badge danger",
             _ => "status-badge neutral"
         };
@@ -1746,8 +1998,10 @@ else
 
     private sealed class PointCandidate
     {
+        public ElementReference RowElement { get; set; }
         public bool Selected { get; set; }
         public bool Exists { get; set; }
+        public int? ExistingPointId { get; set; }
         public string NumericOid { get; set; } = "";
         public string? Label { get; set; }
         public string? Module { get; set; }

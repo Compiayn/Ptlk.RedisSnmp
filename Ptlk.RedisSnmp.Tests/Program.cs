@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Ptlk.RedisSnmp.Configuration;
+using Ptlk.RedisSnmp.Components.Selection;
 using Ptlk.RedisSnmp.Contracts.Mib;
 using Ptlk.RedisSnmp.Contracts.Snmp;
 using Ptlk.RedisSnmp.Contracts.Trap;
@@ -50,6 +51,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("mib set snapshots include default mib bundle", MibSetSnapshotsIncludeDefaultMibBundleAsync),
     ("bundled default mib files refresh empty mib set", BundledDefaultMibFilesRefreshEmptyMibSetAsync),
     ("agent preserves mib context and point preserves mib metadata", AgentPreservesMibContextAndPointPreservesMibMetadataAsync),
+    ("build point overwrite updates existing point", BuildPointOverwriteUpdatesExistingPointAsync),
+    ("build point batch rejects invalid input atomically", BuildPointBatchRejectsInvalidInputAtomicallyAsync),
+    ("extended selection supports file explorer modifiers", RunSync(ExtendedSelectionSupportsFileExplorerModifiers)),
     ("trap parser extracts channel oid", RunSync(TrapParserExtractsTrapOid)),
     ("trap parser reads streaming snmptrapd output", RunSync(TrapParserReadsStreamingSnmptrapdOutput)),
     ("csv import applies mappings last", CsvImportAppliesMappingsLastAsync),
@@ -69,6 +73,33 @@ static Func<Task> RunSync(Action action) => () =>
     action();
     return Task.CompletedTask;
 };
+
+static void ExtendedSelectionSupportsFileExplorerModifiers()
+{
+    var keys = new[] { "a", "b", "c", "d", "e" };
+    var selection = new ExtendedSelectionState(StringComparer.OrdinalIgnoreCase);
+
+    selection.ApplyPointerSelection(keys, "b", range: false, additive: false);
+    AssertEqual("b", string.Join(",", selection.SelectedKeys.OrderBy(key => key)));
+    AssertEqual("b", selection.AnchorKey);
+
+    selection.ApplyPointerSelection(keys, "d", range: false, additive: true);
+    AssertEqual("b,d", string.Join(",", selection.SelectedKeys.OrderBy(key => key)));
+    AssertEqual("d", selection.AnchorKey);
+
+    selection.ApplyPointerSelection(keys, "b", range: true, additive: false);
+    AssertEqual("b,c,d", string.Join(",", selection.SelectedKeys.OrderBy(key => key)));
+    AssertEqual("d", selection.AnchorKey);
+
+    selection.ApplyPointerSelection(keys, "a", range: true, additive: true);
+    AssertEqual("a,b,c,d", string.Join(",", selection.SelectedKeys.OrderBy(key => key)));
+
+    selection.SelectAll(keys);
+    AssertEqual(5, selection.Count);
+    selection.Clear();
+    AssertEqual(0, selection.Count);
+    AssertEqual<string?>(null, selection.AnchorKey);
+}
 
 static void SourcePathNormalization()
 {
@@ -989,6 +1020,94 @@ static async Task AgentPreservesMibContextAndPointPreservesMibMetadataAsync()
     AssertEqual(set.Id, savedAgent.PreferredMibSetId);
     AssertEqual("statusA", savedPoint.MibLabel);
     AssertEqual("VENDOR-A-MIB", savedPoint.MibModule);
+}
+
+static async Task BuildPointOverwriteUpdatesExistingPointAsync()
+{
+    await using var database = await TestDatabase.CreateAsync();
+    var paths = new SnmpSourcePathService();
+    var agent = new SnmpAgentConfig { AgentId = "overwrite-agent", DisplayName = "Overwrite Agent", Host = "127.0.0.1" };
+    database.Db.SnmpAgentConfigs.Add(agent);
+    await database.Db.SaveChangesAsync();
+
+    var service = new SnmpPointService(database.Db, paths);
+    var original = await service.CreateOrUpdateAsync(new SnmpPointConfig
+    {
+        AgentConfigId = agent.Id,
+        NumericOid = "1.3.6.1.2.1.1.3.0",
+        ValueType = SnmpValueTypes.Integer,
+        Access = SnmpAccessModes.ReadOnly,
+        MibLabel = "oldLabel",
+        MibModule = "OLD-MIB"
+    });
+
+    var savedBatch = await service.CreateOrOverwriteBatchAsync(
+    [
+        new SnmpPointConfig
+        {
+            AgentConfigId = agent.Id,
+            NumericOid = ".1.3.6.1.2.1.1.3.0",
+            ValueType = SnmpValueTypes.Timeticks,
+            Access = SnmpAccessModes.ReadWrite,
+            MibLabel = "sysUpTimeInstance",
+            MibModule = "DISMAN-EVENT-MIB"
+        },
+        new SnmpPointConfig
+        {
+            AgentConfigId = agent.Id,
+            NumericOid = "1.3.6.1.2.1.1.5.0",
+            ValueType = SnmpValueTypes.String,
+            Access = SnmpAccessModes.ReadOnly,
+            MibLabel = "sysName"
+        }
+    ]);
+    var overwritten = savedBatch[0];
+
+    AssertEqual(original.Id, overwritten.Id);
+    AssertEqual(2, await database.Db.SnmpPointConfigs.CountAsync());
+    var saved = await database.Db.SnmpPointConfigs.AsNoTracking().SingleAsync(point => point.Id == original.Id);
+    AssertEqual(SnmpValueTypes.Timeticks, saved.ValueType);
+    AssertEqual(SnmpAccessModes.ReadWrite, saved.Access);
+    AssertEqual("sysUpTimeInstance", saved.MibLabel);
+    AssertEqual("DISMAN-EVENT-MIB", saved.MibModule);
+}
+
+static async Task BuildPointBatchRejectsInvalidInputAtomicallyAsync()
+{
+    await using var database = await TestDatabase.CreateAsync();
+    var agent = new SnmpAgentConfig { AgentId = "atomic-agent", DisplayName = "Atomic Agent", Host = "127.0.0.1" };
+    database.Db.SnmpAgentConfigs.Add(agent);
+    await database.Db.SaveChangesAsync();
+    var service = new SnmpPointService(database.Db, new SnmpSourcePathService());
+
+    var rejected = false;
+    try
+    {
+        await service.CreateOrOverwriteBatchAsync(
+        [
+            new SnmpPointConfig
+            {
+                AgentConfigId = agent.Id,
+                NumericOid = "1.3.6.1.2.1.1.1.0",
+                ValueType = SnmpValueTypes.String,
+                Access = SnmpAccessModes.ReadOnly
+            },
+            new SnmpPointConfig
+            {
+                AgentConfigId = agent.Id,
+                NumericOid = "1.3.6.1.2.1.1.2.0",
+                ValueType = SnmpValueTypes.Oid,
+                Access = "invalid"
+            }
+        ]);
+    }
+    catch (InvalidOperationException)
+    {
+        rejected = true;
+    }
+
+    AssertTrue(rejected, "Invalid batch should be rejected.");
+    AssertEqual(0, await database.Db.SnmpPointConfigs.CountAsync());
 }
 
 static void TrapParserExtractsTrapOid()

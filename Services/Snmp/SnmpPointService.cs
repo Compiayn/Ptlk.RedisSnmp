@@ -20,17 +20,120 @@ public sealed class SnmpPointService(
 
     public async Task<SnmpPointConfig> CreateOrUpdateAsync(
         SnmpPointConfig input,
+        CancellationToken cancellationToken = default) =>
+        await SaveAsync(input, overwriteExisting: false, cancellationToken);
+
+    public async Task<SnmpPointConfig> CreateOrOverwriteAsync(
+        SnmpPointConfig input,
         CancellationToken cancellationToken = default)
+    {
+        var saved = await CreateOrOverwriteBatchAsync([input], cancellationToken);
+        return saved[0];
+    }
+
+    public async Task<IReadOnlyList<SnmpPointConfig>> CreateOrOverwriteBatchAsync(
+        IReadOnlyCollection<SnmpPointConfig> inputs,
+        CancellationToken cancellationToken = default)
+    {
+        if (inputs.Count == 0)
+        {
+            return [];
+        }
+
+        var batch = inputs.ToList();
+        foreach (var input in batch)
+        {
+            Validate(input);
+        }
+
+        var agentIds = batch.Select(input => input.AgentConfigId).Distinct().ToList();
+        var agents = await db.SnmpAgentConfigs
+            .Where(agent => agentIds.Contains(agent.Id))
+            .ToDictionaryAsync(agent => agent.Id, cancellationToken);
+        if (agents.Count != agentIds.Count)
+        {
+            throw new InvalidOperationException("One or more selected points reference an unavailable agent.");
+        }
+
+        var prepared = batch.Select(input =>
+        {
+            var agent = agents[input.AgentConfigId];
+            var numericOid = paths.NormalizeNumericOid(input.NumericOid);
+            return new PreparedPoint(input, agent, numericOid, paths.BuildPointSourcePath(agent.AgentId, numericOid));
+        }).ToList();
+
+        var duplicateSourcePath = prepared
+            .GroupBy(item => item.SourcePath, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1)?.Key;
+        if (duplicateSourcePath is not null)
+        {
+            throw new InvalidOperationException($"Selected points contain duplicate source path '{duplicateSourcePath}'.");
+        }
+
+        var existingPoints = await db.SnmpPointConfigs
+            .Where(point => agentIds.Contains(point.AgentConfigId))
+            .ToListAsync(cancellationToken);
+        var existingBySourcePath = existingPoints.ToDictionary(point => point.SourcePath, StringComparer.OrdinalIgnoreCase);
+        var saved = new List<SnmpPointConfig>(prepared.Count);
+
+        foreach (var item in prepared)
+        {
+            var isNew = !existingBySourcePath.TryGetValue(item.SourcePath, out var entity);
+            entity ??= new SnmpPointConfig();
+            Apply(entity, item.Input, item.Agent, item.NumericOid, item.SourcePath);
+            if (isNew)
+            {
+                db.SnmpPointConfigs.Add(entity);
+            }
+
+            saved.Add(entity);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return saved;
+    }
+
+    private async Task<SnmpPointConfig> SaveAsync(
+        SnmpPointConfig input,
+        bool overwriteExisting,
+        CancellationToken cancellationToken)
     {
         Validate(input);
         var agent = await db.SnmpAgentConfigs.FirstAsync(a => a.Id == input.AgentConfigId, cancellationToken);
         var numericOid = paths.NormalizeNumericOid(input.NumericOid);
         var sourcePath = paths.BuildPointSourcePath(agent.AgentId, numericOid);
 
-        var entity = input.Id > 0
-            ? await db.SnmpPointConfigs.FirstAsync(p => p.Id == input.Id, cancellationToken)
-            : new SnmpPointConfig();
+        SnmpPointConfig? entity = null;
+        if (input.Id > 0)
+        {
+            entity = await db.SnmpPointConfigs.FirstAsync(p => p.Id == input.Id, cancellationToken);
+        }
+        else if (overwriteExisting)
+        {
+            entity = await db.SnmpPointConfigs.FirstOrDefaultAsync(p => p.SourcePath == sourcePath, cancellationToken);
+        }
 
+        var isNew = entity is null;
+        entity ??= new SnmpPointConfig();
+
+        Apply(entity, input, agent, numericOid, sourcePath);
+
+        if (isNew)
+        {
+            db.SnmpPointConfigs.Add(entity);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return entity;
+    }
+
+    private static void Apply(
+        SnmpPointConfig entity,
+        SnmpPointConfig input,
+        SnmpAgentConfig agent,
+        string numericOid,
+        string sourcePath)
+    {
         entity.AgentConfigId = agent.Id;
         entity.NumericOid = numericOid;
         entity.SourcePath = sourcePath;
@@ -42,14 +145,6 @@ public sealed class SnmpPointService(
         entity.MibSyntax = NullIfWhiteSpace(input.MibSyntax);
         entity.MibAccess = NullIfWhiteSpace(input.MibAccess);
         entity.MibDescription = NullIfWhiteSpace(input.MibDescription);
-
-        if (input.Id <= 0)
-        {
-            db.SnmpPointConfigs.Add(entity);
-        }
-
-        await db.SaveChangesAsync(cancellationToken);
-        return entity;
     }
 
     public async Task DeleteAsync(int id, CancellationToken cancellationToken = default)
@@ -93,4 +188,10 @@ public sealed class SnmpPointService(
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record PreparedPoint(
+        SnmpPointConfig Input,
+        SnmpAgentConfig Agent,
+        string NumericOid,
+        string SourcePath);
 }

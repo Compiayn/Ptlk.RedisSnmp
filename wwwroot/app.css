@@ -185,7 +185,7 @@ fieldset:disabled .btn:active {
 }
 
 .data-table tbody tr {
-    transition: background-color 120ms ease, box-shadow 120ms ease;
+    transition: background-color 120ms ease;
 }
 
 .data-table tbody tr:hover td {
@@ -194,16 +194,20 @@ fieldset:disabled .btn:active {
 
 .data-table tbody tr:focus-within td {
     background: #f7fafc;
-    box-shadow: inset 3px 0 0 #8bb8d8;
 }
 
 .data-table tr.selected-row td {
     background: #eef6fb;
-    box-shadow: inset 3px 0 0 #0f5fa8;
 }
 
 .data-table tr.selected-row:hover td {
     background: #e5f1f8;
+}
+
+.data-table tr.excluded-row td,
+.data-table tr.excluded-row:hover td {
+    color: #6c757d;
+    background: #f4f6f8;
 }
 
 .numeric {
@@ -660,6 +664,17 @@ fieldset:disabled .btn:active {
     overflow: auto;
 }
 
+.mib-label-cell {
+    min-width: 12rem;
+}
+
+.mib-label-cell code {
+    display: block;
+    margin-top: 0.15rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
 .walk-controls {
     display: grid;
     grid-template-columns: minmax(180px, 1fr) minmax(190px, 1fr) minmax(150px, 210px) auto;
@@ -804,6 +819,50 @@ fieldset:disabled .btn:active {
 
 .point-candidate-table {
     max-height: min(58vh, 620px);
+    overflow: auto;
+}
+
+.candidate-selection-help {
+    margin-bottom: 0.55rem;
+    color: #5f6c7a;
+    font-size: 0.85rem;
+}
+
+.candidate-selection-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.65rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid #c8ddeb;
+    border-radius: 0.4rem;
+    background: #f3f8fc;
+}
+
+.candidate-selection-count {
+    color: #23445d;
+    font-weight: 700;
+}
+
+.candidate-selection-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.candidate-selection-row {
+    cursor: default;
+    user-select: none;
+}
+
+.candidate-selection-row:focus-visible {
+    outline: 2px solid #0f5fa8;
+    outline-offset: -2px;
+}
+
+.point-conflict-table {
+    max-height: min(42vh, 460px);
     overflow: auto;
 }
 
