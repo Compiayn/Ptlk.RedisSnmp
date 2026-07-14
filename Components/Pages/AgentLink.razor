@@ -23,7 +23,7 @@
 <div class="toolbar">
     <div>
         <h2 class="toolbar-title">Credentials</h2>
-        <div class="muted-metadata">Secrets are never displayed; leave password fields blank to keep existing values.</div>
+        <div class="muted-metadata">Stored communities are shown in plaintext while editing; SNMPv3 passwords remain write-only.</div>
     </div>
     <button class="btn btn-primary" type="button" @onclick="() => OpenCredentialDialog()">Add Credential</button>
 </div>
@@ -177,7 +177,7 @@ else
         <div class="dialog-header">
             <div>
                 <h2 class="m-0">@((credential.Id > 0) ? "Edit Credential" : "Add Credential")</h2>
-                <div class="muted-metadata">Secret fields are write-only.</div>
+                <div class="muted-metadata">Stored communities are shown in plaintext while editing; SNMPv3 passwords remain write-only.</div>
             </div>
             <button class="btn-close" type="button" aria-label="Close" @onclick="CloseCredentialDialog"></button>
         </div>
@@ -199,13 +199,13 @@ else
                 {
                     <div class="col-12">
                         <label class="form-label">Read community</label>
-                        <input class="form-control" type="password" @bind="readCommunity" autocomplete="new-password" />
-                        <div class="form-text">Used by SNMP Get and Walk. Leave blank while editing to keep the stored value.</div>
+                        <input class="form-control" type="text" @bind="readCommunity" autocomplete="off" />
+                        <div class="form-text">Used by SNMP Get and Walk. Stored encrypted and shown in plaintext while editing.</div>
                     </div>
                     <div class="col-12">
                         <label class="form-label">Write community</label>
-                        <input class="form-control" type="password" @bind="writeCommunity" autocomplete="new-password" />
-                        <div class="form-text">Used by SNMP Set. Leave blank while editing to keep the stored value.</div>
+                        <input class="form-control" type="text" @bind="writeCommunity" autocomplete="off" />
+                        <div class="form-text">Used by SNMP Set. Stored encrypted and shown in plaintext while editing.</div>
                     </div>
                 }
                 @if (credential.Version == SnmpVersions.V3)
@@ -259,7 +259,7 @@ else
         <div class="dialog-header">
             <div>
                 <h2 class="m-0">@((trapCredential.Id > 0) ? "Edit Trap Credential" : "Add Trap Credential")</h2>
-                <div class="muted-metadata">Trap secret fields are write-only.</div>
+                <div class="muted-metadata">Stored trap community is shown in plaintext while editing; SNMPv3 passwords remain write-only.</div>
             </div>
             <button class="btn-close" type="button" aria-label="Close" @onclick="CloseTrapCredentialDialog"></button>
         </div>
@@ -287,7 +287,8 @@ else
                 {
                     <div class="col-12">
                         <label class="form-label">Trap community</label>
-                        <input class="form-control" type="password" @bind="trapCommunity" autocomplete="new-password" />
+                        <input class="form-control" type="text" @bind="trapCommunity" autocomplete="off" />
+                        <div class="form-text">Stored encrypted and shown in plaintext while editing.</div>
                         <div class="form-check mt-2">
                             <input class="form-check-input" id="trap-community-clear" type="checkbox" @bind="clearTrapCommunity" />
                             <label class="form-check-label" for="trap-community-clear">Clear stored community</label>
@@ -593,9 +594,10 @@ else
                                     <div class="walk-node-title">
                                         <span class="walk-segment">@node.Segment</span>
                                         <code>@node.Oid</code>
-                                        @if (!string.IsNullOrWhiteSpace(node.Lookup?.SymbolicName))
+                                        @{ var nodeLabel = MibLabelFormatter.FormatSymbolicOid(node.Lookup, node.Oid); }
+                                        @if (!string.IsNullOrWhiteSpace(nodeLabel))
                                         {
-                                            <span class="walk-label">@node.Lookup.SymbolicName</span>
+                                            <span class="walk-label">@nodeLabel</span>
                                         }
                                         @if (!string.IsNullOrWhiteSpace(node.Lookup?.ModuleName))
                                         {
@@ -630,7 +632,7 @@ else
 @if (generateDialogOpen && generateAgent is not null)
 {
     <div class="dialog-backdrop" @onclick="CloseGenerateDialog"></div>
-    <div class="dialog-panel extra-wide" role="dialog" aria-modal="true">
+    <div class="dialog-panel extra-wide point-manager-dialog" role="dialog" aria-modal="true">
         <div class="dialog-header">
             <div>
                 <h2 class="m-0">Edit Points for @generateAgent.DisplayName</h2>
@@ -655,163 +657,182 @@ else
 
             @if (pointManagerTab == PointManagerPointsTab)
             {
-                <div class="toolbar point-manager-toolbar">
-                    <div>
-                        <h3 class="section-title">Configured Points</h3>
-                        <div class="muted-metadata">Source paths are generated from agent ID and normalized numeric OID.</div>
+                <div class="point-manager-tab-panel">
+                    <div class="toolbar point-manager-toolbar">
+                        <div class="point-manager-heading">
+                            <h3 class="section-title">Configured Points</h3>
+                            <details class="info-disclosure">
+                                <summary aria-label="Show Configured Points information" title="Show information">i</summary>
+                                <div class="info-disclosure-content" role="note">
+                                    Source paths are generated from agent ID and normalized numeric OID.
+                                </div>
+                            </details>
+                        </div>
+                        <button class="btn btn-primary" type="button" @onclick="() => OpenPointDialog(null, generateAgent)">Add Point</button>
                     </div>
-                    <button class="btn btn-primary" type="button" @onclick="() => OpenPointDialog(null, generateAgent)">Add Point</button>
-                </div>
 
-                @if (ManagedAgentPoints.Count == 0)
-                {
-                    <div class="empty-state">No SNMP points are configured for this agent.</div>
-                }
-                else
-                {
-                    <div class="table-responsive point-manager-table">
-                        <table class="table table-sm data-table align-middle">
-                            <thead>
-                                <tr>
-                                    <th>MIB LABEL</th>
-                                    <th>Value type</th>
-                                    <th>Access</th>
-                                    <th class="actions">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                            @foreach (var item in ManagedAgentPoints)
-                            {
-                                <tr class='@(pointDialogOpen && point.Id == item.Id ? "selected-row" : null)'>
-                                    <td class="mib-label-cell">
-                                        <div>@DisplayMibLabel(item.MibLabel)</div>
-                                        <code>@item.NumericOid</code>
-                                    </td>
-                                    <td>@item.ValueType</td>
-                                    <td><span class="status-badge neutral">@item.Access</span></td>
-                                    <td class="actions">
-                                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenPointDialog(item, generateAgent)">Edit</button>
-                                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenPointDeleteDialog(item)">Delete</button>
-                                    </td>
-                                </tr>
-                            }
-                            </tbody>
-                        </table>
-                    </div>
-                }
+                    @if (ManagedAgentPoints.Count == 0)
+                    {
+                        <div class="empty-state">No SNMP points are configured for this agent.</div>
+                    }
+                    else
+                    {
+                        <div class="table-responsive point-manager-table">
+                            <table class="table table-sm data-table align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>MIB LABEL</th>
+                                        <th>Value type</th>
+                                        <th>Access</th>
+                                        <th class="actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                @foreach (var item in ManagedAgentPoints)
+                                {
+                                    <tr class='@(pointDialogOpen && point.Id == item.Id ? "selected-row" : null)'>
+                                        <td class="mib-label-cell">
+                                            <div>@DisplayMibLabel(item.MibLabel)</div>
+                                            <code>@item.NumericOid</code>
+                                        </td>
+                                        <td>@item.ValueType</td>
+                                        <td><span class="status-badge neutral">@item.Access</span></td>
+                                        <td class="actions">
+                                            <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenPointDialog(item, generateAgent)">Edit</button>
+                                            <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenPointDeleteDialog(item)">Delete</button>
+                                        </td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
             }
             else
             {
-                <div class="toolbar point-manager-toolbar">
-                    <div>
-                        <h3 class="section-title">Build Points</h3>
-                        <div class="muted-metadata">Scan this agent with SNMP Walk, review candidate objects, then apply selected rows as points.</div>
+                <div class="point-manager-tab-panel">
+                    <div class="toolbar point-manager-toolbar">
+                        <div class="point-manager-heading">
+                            <h3 class="section-title">Build Points</h3>
+                            <details class="info-disclosure">
+                                <summary aria-label="Show Build Points information" title="Show information">i</summary>
+                                <div class="info-disclosure-content" role="note">
+                                    Scan this agent with SNMP Walk, review candidate objects, then apply selected rows as points.
+                                </div>
+                            </details>
+                        </div>
                     </div>
-                </div>
 
-                <div class="walk-controls point-build-controls">
-                    <div>
-                        <label class="form-label">Root OID</label>
-                        <input class="form-control" @bind="generateRootOid" disabled="@generateRunning" />
+                    <div class="walk-controls point-build-controls">
+                        <div>
+                            <label class="form-label">Root OID</label>
+                            <input class="form-control" @bind="generateRootOid" disabled="@generateRunning" />
+                        </div>
+                        <div>
+                            <label class="form-label">MIB Set</label>
+                            <select class="form-select" value="@MibSetSelectValue(generateSelectedMibSetId)" @onchange="OnGenerateMibSetChanged" disabled="@generateRunning">
+                                <option value="">Numeric OID only</option>
+                                @foreach (var item in mibSetOptions)
+                                {
+                                    <option value="@item.Id">@item.Name (@item.Status)</option>
+                                }
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Timeout ms</label>
+                            <input class="form-control numeric" type="number" @bind="generateOperationTimeoutMs" disabled="@generateRunning" />
+                        </div>
+                        <div class="walk-control-actions">
+                            <button class="btn btn-primary" type="button" @onclick="RunGenerateCandidatesAsync" disabled="@generateRunning">@(generateRunning ? "Walking..." : "Scan")</button>
+                        </div>
                     </div>
-                    <div>
-                        <label class="form-label">MIB Set</label>
-                        <select class="form-select" value="@MibSetSelectValue(generateSelectedMibSetId)" @onchange="OnGenerateMibSetChanged" disabled="@generateRunning">
-                            <option value="">Numeric OID only</option>
-                            @foreach (var item in mibSetOptions)
-                            {
-                                <option value="@item.Id">@item.Name (@item.Status)</option>
-                            }
-                        </select>
-                    </div>
-                    <div>
-                        <label class="form-label">Timeout ms</label>
-                        <input class="form-control numeric" type="number" @bind="generateOperationTimeoutMs" disabled="@generateRunning" />
-                    </div>
-                    <div class="walk-control-actions">
-                        <button class="btn btn-primary" type="button" @onclick="RunGenerateCandidatesAsync" disabled="@generateRunning">@(generateRunning ? "Walking..." : "Scan")</button>
-                    </div>
-                </div>
-                <div class="form-check form-switch mb-3">
-                    <input class="form-check-input" id="generate-readable" type="checkbox" @bind="generateReadableOnly" disabled="@generateRunning" />
-                    <label class="form-check-label" for="generate-readable">Readable objects only</label>
-                </div>
-
-                @if (!string.IsNullOrWhiteSpace(generateError))
-                {
-                    <div class="alert alert-danger">@generateError</div>
-                }
-                else if (generateRunning)
-                {
-                    <div class="empty-state">Running SNMP Walk...</div>
-                }
-                else if (pointCandidates.Count == 0)
-                {
-                    <div class="empty-state">No point candidates are available. Run Scan to build candidates from this agent.</div>
-                }
-                else
-                {
-                    <div class="candidate-selection-help">
-                        Select rows with a click. Use Shift for a range and Ctrl (or Command) to add or remove individual rows.
-                    </div>
-                    @if (candidateRowSelection.Count > 0)
-                    {
+                    <div class="point-build-selection-bar">
+                        <div class="form-check form-switch point-build-readable-option">
+                            <input class="form-check-input" id="generate-readable" type="checkbox" @bind="generateReadableOnly" disabled="@generateRunning" />
+                            <label class="form-check-label" for="generate-readable">Readable objects only</label>
+                        </div>
                         <div class="candidate-selection-toolbar" aria-label="Selected candidate actions">
-                            <span class="candidate-selection-count" role="status">@candidateRowSelection.Count row(s) selected</span>
+                            <div class="candidate-selection-summary">
+                                <span class="candidate-selection-count" role="status">@candidateRowSelection.Count row(s) selected</span>
+                                <details class="info-disclosure info-disclosure-end">
+                                    <summary aria-label="Show row selection information" title="Show information">i</summary>
+                                    <div class="info-disclosure-content" role="note">
+                                        Select rows with a click. Use Shift for a range and Ctrl (or Command) to add or remove individual rows.
+                                    </div>
+                                </details>
+                            </div>
                             <div class="candidate-selection-actions">
-                                <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => SetSelectedCandidateImportState(true)">Check Selected</button>
-                                <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => SetSelectedCandidateImportState(false)">Uncheck Selected</button>
+                                <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => SetSelectedCandidateImportState(true)" disabled="@(candidateRowSelection.Count == 0)">Check Selected</button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => SetSelectedCandidateImportState(false)" disabled="@(candidateRowSelection.Count == 0)">Uncheck Selected</button>
                             </div>
                         </div>
-                    }
-                    <div class="table-responsive point-candidate-table">
-                        <table class="table table-sm data-table align-middle" role="grid" aria-label="Point candidates" aria-multiselectable="true">
-                            <thead>
-                                <tr>
-                                    <th>Import</th>
-                                    <th>MIB LABEL</th>
-                                    <th>Module</th>
-                                    <th>Syntax</th>
-                                    <th>Access</th>
-                                    <th>Current value</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                            @foreach (var candidate in pointCandidates)
-                            {
-                                <tr @key="candidate.NumericOid"
-                                    @ref="candidate.RowElement"
-                                    class="@CandidateRowClass(candidate)"
-                                    role="row"
-                                    tabindex="0"
-                                    aria-selected="@(candidateRowSelection.IsSelected(candidate.NumericOid) ? "true" : "false")"
-                                    @onclick="args => SelectCandidateRowAsync(args, candidate)"
-                                    @onfocus="() => FocusCandidateRow(candidate)"
-                                    @onkeydown="args => HandleCandidateRowKeyDownAsync(args, candidate)">
-                                    <td>
-                                        <input class="form-check-input"
-                                               type="checkbox"
-                                               aria-label="@CandidateImportAriaLabel(candidate)"
-                                               @bind="candidate.Selected"
-                                               @onclick:stopPropagation="true"
-                                               @onkeydown:stopPropagation="true" />
-                                    </td>
-                                    <td class="mib-label-cell">
-                                        <div>@DisplayMibLabel(candidate.Label)</div>
-                                        <code>@candidate.NumericOid</code>
-                                    </td>
-                                    <td>@(candidate.Module ?? "-")</td>
-                                    <td>@(candidate.Syntax ?? "-")</td>
-                                    <td><span class="status-badge neutral">@candidate.Access</span></td>
-                                    <td class="code-cell">@candidate.CurrentValue</td>
-                                    <td><span class="@StatusBadgeClass(candidate.Status)">@candidate.Status</span></td>
-                                </tr>
-                            }
-                            </tbody>
-                        </table>
                     </div>
-                }
+
+                    @if (!string.IsNullOrWhiteSpace(generateError))
+                    {
+                        <div class="alert alert-danger">@generateError</div>
+                    }
+                    else if (generateRunning)
+                    {
+                        <div class="empty-state">Running SNMP Walk...</div>
+                    }
+                    else if (pointCandidates.Count == 0)
+                    {
+                        <div class="empty-state">No point candidates are available. Run Scan to build candidates from this agent.</div>
+                    }
+                    else
+                    {
+                        <div class="table-responsive point-candidate-table">
+                            <table class="table table-sm data-table align-middle" role="grid" aria-label="Point candidates" aria-multiselectable="true">
+                                <thead>
+                                    <tr>
+                                        <th class="checkbox-column">Import</th>
+                                        <th>MIB LABEL</th>
+                                        <th>Module</th>
+                                        <th>Syntax</th>
+                                        <th>Access</th>
+                                        <th>Current value</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                @foreach (var candidate in pointCandidates)
+                                {
+                                    <tr @key="candidate.NumericOid"
+                                        @ref="candidate.RowElement"
+                                        class="@CandidateRowClass(candidate)"
+                                        role="row"
+                                        tabindex="0"
+                                        data-extended-selection-row
+                                        aria-selected="@(candidateRowSelection.IsSelected(candidate.NumericOid) ? "true" : "false")"
+                                        @onclick="args => SelectCandidateRowAsync(args, candidate)"
+                                        @onfocus="() => FocusCandidateRow(candidate)"
+                                        @onkeydown="args => HandleCandidateRowKeyDownAsync(args, candidate)">
+                                        <td class="checkbox-column">
+                                            <input class="form-check-input"
+                                                   type="checkbox"
+                                                   aria-label="@CandidateImportAriaLabel(candidate)"
+                                                   @bind="candidate.Selected"
+                                                   @onclick:stopPropagation="true"
+                                                   @onkeydown:stopPropagation="true" />
+                                        </td>
+                                        <td class="mib-label-cell">
+                                            <div>@DisplayMibLabel(candidate.Label)</div>
+                                            <code>@candidate.NumericOid</code>
+                                        </td>
+                                        <td>@(candidate.Module ?? "-")</td>
+                                        <td>@(candidate.Syntax ?? "-")</td>
+                                        <td><span class="status-badge neutral">@candidate.Access</span></td>
+                                        <td class="code-cell">@candidate.CurrentValue</td>
+                                        <td><span class="@StatusBadgeClass(candidate.Status)">@candidate.Status</span></td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
             }
         </div>
         <div class="dialog-footer">
@@ -852,7 +873,7 @@ else
                     <table class="table table-sm data-table align-middle">
                         <thead>
                             <tr>
-                                <th>Overwrite</th>
+                                <th class="checkbox-column">Overwrite</th>
                                 <th>MIB LABEL</th>
                                 <th>Existing</th>
                                 <th>Incoming</th>
@@ -863,7 +884,7 @@ else
                         {
                             var existing = ExistingPoint(candidate);
                             <tr class='@(!candidate.Selected ? "excluded-row" : null)'>
-                                <td>
+                                <td class="checkbox-column">
                                     <input class="form-check-input" type="checkbox" aria-label="Overwrite @candidate.NumericOid" @bind="candidate.Selected" disabled="@buildImportRunning" />
                                 </td>
                                 <td class="mib-label-cell">
@@ -1017,6 +1038,22 @@ else
         writeCommunity = null;
         authPassword = null;
         privPassword = null;
+
+        if (item is not null)
+        {
+            try
+            {
+                var secrets = Credentials.RevealSecrets(item);
+                readCommunity = secrets.ReadCommunity;
+                writeCommunity = secrets.WriteCommunity;
+            }
+            catch (Exception ex)
+            {
+                SetMessage($"Unable to reveal the stored community: {ex.Message}", isError: true);
+                return;
+            }
+        }
+
         credentialDialogOpen = true;
     }
 
@@ -1031,6 +1068,20 @@ else
         clearTrapCommunity = false;
         clearTrapAuthPassword = false;
         clearTrapPrivPassword = false;
+
+        if (item is not null)
+        {
+            try
+            {
+                trapCommunity = TrapCredentials.RevealSecrets(item).Community;
+            }
+            catch (Exception ex)
+            {
+                SetMessage($"Unable to reveal the stored trap community: {ex.Message}", isError: true);
+                return;
+            }
+        }
+
         trapCredentialDialogOpen = true;
     }
 
@@ -1458,11 +1509,11 @@ else
             var exists = existingPoint is not null;
             candidates.Add(new PointCandidate
             {
-                Selected = true,
+                Selected = !exists,
                 Exists = exists,
                 ExistingPointId = existingPoint?.Id,
                 NumericOid = numericOid,
-                Label = lookup?.SymbolicName,
+                Label = MibLabelFormatter.FormatSymbolicOid(lookup, numericOid),
                 Module = lookup?.ModuleName,
                 Syntax = lookup?.Syntax ?? item.Syntax,
                 MibAccess = lookup?.Access,

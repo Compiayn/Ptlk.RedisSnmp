@@ -46,6 +46,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("source path suggestions include expressions", SourcePathSuggestionsIncludeExpressionsAsync),
     ("expression runtime evaluates snmp cache", ExpressionRuntimeEvaluatesSnmpCacheAsync),
     ("mib import keeps numeric oid authoritative", MibImportKeepsNumericOidAsync),
+    ("mib label keeps unresolved oid suffix", RunSync(MibLabelKeepsUnresolvedOidSuffix)),
     ("mib sets store raw files and refresh snapshots", MibSetsStoreRawFilesAndRefreshSnapshotsAsync),
     ("mib notification objects are stored for trap diagnostics", MibNotificationObjectsAreStoredForTrapDiagnosticsAsync),
     ("mib set snapshots include default mib bundle", MibSetSnapshotsIncludeDefaultMibBundleAsync),
@@ -184,6 +185,8 @@ static async Task NetSnmpUsesReadWriteCommunitiesAsync()
     var credential = await service.CreateOrUpdateAsync(
         new SnmpCredentialConfig { Name = "rw", Version = SnmpVersions.V2C },
         new SnmpCredentialSecrets("public", "private", null, null));
+    AssertTrue(credential.ProtectedReadCommunity != "public", "Read community should remain protected at rest.");
+    AssertTrue(credential.ProtectedWriteCommunity != "private", "Write community should remain protected at rest.");
     var builder = new NetSnmpArgumentBuilder(service);
     var agent = new SnmpAgentConfig
     {
@@ -264,6 +267,7 @@ static async Task TrapCredentialCommunityCanBeSetPreservedAndClearedAsync()
         new SnmpTrapCredentialConfig { Name = "trap", Version = SnmpVersions.V2C },
         new SnmpTrapCredentialSecrets("trap-public", null, null));
 
+    AssertTrue(credential.ProtectedCommunity != "trap-public", "Trap community should remain protected at rest.");
     AssertEqual("trap-public", service.RevealSecrets(credential).Community);
 
     var preserved = await service.CreateOrUpdateAsync(
@@ -679,6 +683,24 @@ static async Task MibImportKeepsNumericOidAsync()
     AssertEqual("sysDescr", node?.SymbolicName);
 }
 
+static void MibLabelKeepsUnresolvedOidSuffix()
+{
+    const string baseOid = "1.3.6.1.4.1.2468.1.2.1.1.6.6.1.1";
+    var lookup = new MibLookupResult(
+        baseOid,
+        "upsBatteryTestScheduleIndex",
+        "UPS-MIB",
+        "INTEGER",
+        "read-only",
+        null);
+
+    AssertEqual("upsBatteryTestScheduleIndex", MibLabelFormatter.FormatSymbolicOid(lookup, baseOid));
+    AssertEqual("upsBatteryTestScheduleIndex.1", MibLabelFormatter.FormatSymbolicOid(lookup, $"{baseOid}.1"));
+    AssertEqual("upsBatteryTestScheduleIndex.2", MibLabelFormatter.FormatSymbolicOid(lookup, $".{baseOid}.2"));
+    AssertEqual("upsBatteryTestScheduleIndex.1.4", MibLabelFormatter.FormatSymbolicOid(lookup, $"{baseOid}.1.4"));
+    AssertEqual("UPS-MIB::upsBatteryTestScheduleIndex.1", MibLabelFormatter.FormatQualifiedSymbolicOid(lookup, $"{baseOid}.1"));
+}
+
 static async Task MibSetsStoreRawFilesAndRefreshSnapshotsAsync()
 {
     await using var database = await TestDatabase.CreateAsync();
@@ -745,6 +767,7 @@ static async Task MibSetsStoreRawFilesAndRefreshSnapshotsAsync()
     var a = await lookup.LookupAsync(vendorA.Id, "1.3.6.1.4.1.1000.1.0");
     var b = await lookup.LookupAsync(vendorB.Id, "1.3.6.1.4.1.1000.1");
     AssertEqual("statusA", a?.SymbolicName);
+    AssertEqual("statusA.0", MibLabelFormatter.FormatSymbolicOid(a, "1.3.6.1.4.1.1000.1.0"));
     AssertEqual("statusB", b?.SymbolicName);
 
     await service.UploadMibFileAsync(vendorA.Id, "a-conflict.mib", TextStream("""

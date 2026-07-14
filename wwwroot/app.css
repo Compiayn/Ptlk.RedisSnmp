@@ -606,6 +606,58 @@ fieldset:disabled .btn:active {
     width: min(1180px, calc(100vw - 2rem));
 }
 
+.dialog-panel.point-manager-dialog {
+    height: min(70rem, calc(100vh - 2rem));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+    .dialog-panel.point-manager-dialog {
+        height: min(70rem, calc(100dvh - 2rem));
+    }
+}
+
+.point-manager-dialog > .dialog-header,
+.point-manager-dialog > .dialog-footer {
+    flex: 0 0 auto;
+}
+
+.point-manager-dialog > .dialog-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.point-manager-tab-panel {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.point-manager-dialog .point-manager-tabs,
+.point-manager-tab-panel > .point-manager-toolbar,
+.point-manager-tab-panel > .point-build-controls,
+.point-manager-tab-panel > .form-switch,
+.point-manager-tab-panel > .alert,
+.point-manager-tab-panel > .empty-state,
+.point-manager-tab-panel > .point-build-selection-bar {
+    flex: 0 0 auto;
+}
+
+.point-manager-dialog .point-manager-table,
+.point-manager-dialog .point-candidate-table {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow: auto;
+}
+
 .dialog-panel.mib-detail-panel {
     width: min(1416px, calc(100vw - 1rem));
 }
@@ -659,6 +711,74 @@ fieldset:disabled .btn:active {
     margin-top: 0;
 }
 
+.point-manager-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.info-disclosure {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.info-disclosure summary {
+    display: grid;
+    width: 1.35rem;
+    height: 1.35rem;
+    place-items: center;
+    border: 1px solid #6f8294;
+    border-radius: 50%;
+    background: #ffffff;
+    color: #3f566b;
+    cursor: pointer;
+    font-family: Georgia, serif;
+    font-size: 0.82rem;
+    font-weight: 700;
+    line-height: 1;
+    list-style: none;
+}
+
+.info-disclosure summary::-webkit-details-marker {
+    display: none;
+}
+
+.info-disclosure summary:hover,
+.info-disclosure summary:focus-visible,
+.info-disclosure[open] summary {
+    border-color: #0f5fa8;
+    background: #e8f2f9;
+    color: #0f5fa8;
+}
+
+.info-disclosure summary:focus-visible {
+    outline: 2px solid #0f5fa8;
+    outline-offset: 2px;
+}
+
+.info-disclosure-content {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: 0;
+    z-index: 30;
+    width: max-content;
+    max-width: min(24rem, calc(100vw - 4rem));
+    padding: 0.65rem 0.75rem;
+    border: 1px solid #b9c7d4;
+    border-radius: 0.4rem;
+    background: #ffffff;
+    box-shadow: 0 8px 22px rgba(14, 22, 31, 0.16);
+    color: #354352;
+    font-size: 0.85rem;
+    font-weight: 400;
+    line-height: 1.45;
+}
+
+.info-disclosure-end .info-disclosure-content {
+    right: 0;
+    left: auto;
+}
+
 .point-manager-table {
     max-height: min(50vh, 560px);
     overflow: auto;
@@ -666,6 +786,16 @@ fieldset:disabled .btn:active {
 
 .mib-label-cell {
     min-width: 12rem;
+}
+
+.data-table .checkbox-column {
+    text-align: center;
+}
+
+.data-table td.checkbox-column .form-check-input {
+    float: none;
+    margin: 0;
+    vertical-align: middle;
 }
 
 .mib-label-cell code {
@@ -822,22 +952,41 @@ fieldset:disabled .btn:active {
     overflow: auto;
 }
 
-.candidate-selection-help {
-    margin-bottom: 0.55rem;
-    color: #5f6c7a;
-    font-size: 0.85rem;
-}
-
-.candidate-selection-toolbar {
+.point-build-selection-bar {
     display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    margin-bottom: 0.65rem;
+    min-height: 3.45rem;
+    margin-bottom: 0.75rem;
     padding: 0.55rem 0.7rem;
     border: 1px solid #c8ddeb;
     border-radius: 0.4rem;
     background: #f3f8fc;
+}
+
+.point-build-readable-option {
+    flex: 0 0 auto;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.candidate-selection-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.candidate-selection-summary {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.4rem;
 }
 
 .candidate-selection-count {
@@ -847,6 +996,7 @@ fieldset:disabled .btn:active {
 
 .candidate-selection-actions {
     display: flex;
+    flex: 0 0 auto;
     flex-wrap: wrap;
     gap: 0.45rem;
 }
@@ -854,6 +1004,14 @@ fieldset:disabled .btn:active {
 .candidate-selection-row {
     cursor: default;
     user-select: none;
+}
+
+.data-table tr.candidate-selection-row.selected-row td {
+    background: #d6e9f6;
+}
+
+.data-table tr.candidate-selection-row.selected-row:hover td {
+    background: #c9e1f1;
 }
 
 .candidate-selection-row:focus-visible {
