@@ -29,4 +29,11 @@
     </Content>
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Remove="Ptlk.RedisSnmp.Tests\**\*.cs" />
+    <Content Remove="Ptlk.RedisSnmp.Tests\**\*" />
+    <EmbeddedResource Remove="Ptlk.RedisSnmp.Tests\**\*" />
+    <None Remove="Ptlk.RedisSnmp.Tests\**\*" />
+  </ItemGroup>
+
 </Project>
